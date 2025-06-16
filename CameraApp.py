@@ -1,19 +1,15 @@
 from tkinter import Tk
 from src.gui import GUI
 
+
+
 class CameraApp:
     def __init__(self):
         self.root = Tk()
-        self.root.geometry(f"{self.root.winfo_screenwidth()}x{self.root.winfo_screenheight()}")
-        self.root.title("Camera Control App")
-        
+        self.root.geometry(f"{self.root.winfo_screenwidth()-400}x{self.root.winfo_screenheight()-600}")
+        self.root.title("Camera Control App")   
         self.gui = GUI(root=self.root)
-        
-        self.root.bind('<Escape>' , lambda e: self.on_closing())
-        self.root.protocol("WM_DELETE_WINDOW", lambda: self.on_closing())
-        
-    def on_closing(self):
-        self.gui.on_closing()
+        self.root.protocol("WM_DELETE_WINDOW", self.root.destroy)
         
     def run(self):
         self.root.mainloop()

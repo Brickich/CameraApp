@@ -1,429 +1,676 @@
 import tkinter as tk
+from tkinter import ttk
 from tkinter import messagebox
-from PIL import Image, ImageTk, ImageDraw
-from .video_utils import VideoEditor
+from PIL import Image, ImageTk
+from .video_editor import VideoEditor
 from .camera import Camera
-import time
-import os
-from threading import Thread, Event, Lock
-import queue
+from gxipy import GxTriggerSourceEntry
 
-IMAGES = {
-    'play_pause': ["assets/play_button.png", "assets/pause_button.png"],
-    'white_balance': "assets/white_balance.png",
-    'crosshair': "assets/crosshair.png",
-    'save': "assets/save.png",
-    'no_photo': "assets/no_image.png",
-    'flip_h': "assets/flip_h.png",
-    'flip_v': "assets/flip_v.png",
-    'rotate_right': "assets/rotate_to_right.png",
-    'rotate_left': "assets/rotate_to_left.png"
-} 
 
-class GUI:
-    def __init__(self, root: tk.Tk = None):
+class ImageViewContainer:
+
+    def __init__(
+        self,
+        root: tk.Tk,
+        video_editor:VideoEditor,
+        styles: dict,
+        camera:Camera,
+        position_and_size={
+            "relx": 0.1,
+            "rely": 0.1,
+            "x": 0,
+            "y": 0,
+            "relwidth": 0.9,
+            "relheight": 0.9,
+        },
+    ):
         self.root = root
-        self.init_variables()
-        self.init_gui()
+        self.video_editor = video_editor
+        self.camera = camera
 
-    def init_variables(self):
-        self.play_pause_index = 0 
-        self.camera = Camera()
-        self.image_frame = None
-        self.output_dir = "output"
-        self.capturing_event = Event()
-        self.saving_event = Event()
-        self.saving_image_queue = queue.Queue(maxsize=25)
-        self.capturing_image_queue = queue.Queue(maxsize=3)
-        self.image_lock = Lock()
-        self.crosshair_enabled = False
-        self.flip_h_enabled = False
-        self.flip_v_enabled = False
-        self.image_angle = 0
-        self.frames_data = [] 
-        self.trigger_start_time = None 
-        self.trigger_time = 1000
-
-    def get_image_from_camera(self):
-        while not self.capturing_event.is_set():
-            try:
-                image = self.camera.get_RGB_image()
-                if not image:
-                    continue
-                    
-                if self.image_angle != 0:
-                    image = image.rotate(self.image_angle)
-                if self.flip_v_enabled:
-                    image = image.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
-                if self.flip_h_enabled:
-                    image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-                    
-                try:
-                    with self.image_lock:
-                        if self.camera.is_triggered and self.trigger_start_time is not None:
-                            image_copy = image.copy()
-                            timestamp = round(time.perf_counter() - self.trigger_start_time, 4)
-                            try:
-                                self.saving_image_queue.put((image_copy, timestamp))
-                            except queue.Full:
-                                print("Warning: Saving queue is full, skipping frame")
-                                
-                        self.capturing_image_queue.put(image)
-                except queue.Full:
-                    time.sleep(0.01)
-                    
-            except Exception as e:
-                print(f"Error in get_image_from_camera: {str(e)}")
-                time.sleep(0.1)
-
-    def update_image_frame(self):
-        while not self.capturing_event.is_set():
-            try:
-                image = self.capturing_image_queue.get(timeout=0.1)
-                if self.crosshair_enabled:
-                    image = self.add_crosshair(image)
-                self.root.after(0, self.update_frame, ImageTk.PhotoImage(image))
-                    
-            except queue.Empty:
-                continue
-            except Exception as e:
-                print(f"Error in update_image_frame: {str(e)}")
-                time.sleep(0.1)
-                
-    def update_frame(self, image: ImageTk.PhotoImage):
-        self.image_frame.config(image=image)
-        self.image_frame.image = image
-
-        
-    def save_images_to_array(self):
-        while not self.saving_event.is_set():
-            try:
-                image, timestamp = self.saving_image_queue.get(timeout=0.1) 
-                with self.image_lock:
-                    self.frames_data.append((image, timestamp))
-            except queue.Empty:
-                continue
-            except Exception as e:
-                print(f"Error in save_images_to_array: {str(e)}")
-                continue
-
-    def switch_camera_recording_mode(self):
-        self.camera.switch_recording()
-        self.play_pause_index = 1 - self.play_pause_index
-        self.on_off_button.config(image=self.play_pause_images[self.play_pause_index])
-        self.start_camera_stream() if self.camera.is_recording else self.stop_camera_stream()
-
-    def switch_camera_trigger_mode(self):
-        try:
-            if not self.camera.is_recording:
-                raise Exception("Turn ON the camera")
-
-            self.camera.switch_trigger()
-            if self.camera.is_triggered:
-                self.saving_event.clear()
-                self.frames_data.clear() 
-                self.trigger_start_time = time.perf_counter() 
-                self.save_images_thread = Thread(target=self.save_images_to_array, daemon=True)
-                self.save_images_thread.start()
-                self.root.after(self.trigger_time, lambda: [self.saving_event.set(), self.camera.switch_trigger()])
-                self.root.after(self.trigger_time+1000, lambda: self.check_completion())
-            else:
-                self.saving_event.set()
-                self.trigger_start_time = None
-
-        except Exception as e:
-            messagebox.showerror("Error", f"{str(e)}")
-            return
-
-    def check_completion(self):
-        if not self.saving_image_queue.empty():
-            print(f"Waiting for queue to empty. Queue size: {self.saving_image_queue.qsize()}")
-            self.root.after(2000, self.check_completion)
-        elif not self.frames_data:
-            print("No frames were saved")
-            messagebox.showinfo("Info", "There's no saved images in memory")
-            return
-        else:
-            print(f"Trigger completed. Total frames saved: {len(self.frames_data)}")
-            self.root.after(1000, self.open_editor)
-
-    def open_editor(self):
-        editor_window = tk.Toplevel()
-        output_dir = check_dir(self.output_dir)
-        VideoEditor(root=editor_window, frames_data=self.frames_data, output_dir=output_dir)
-        self.frames_data.clear() 
-
-    def start_camera_stream(self):
-        self.capturing_event.clear()
-        self.capture_image_thread = Thread(
-            target=self.get_image_from_camera, daemon=True
-        )
-        self.update_frame_thread = Thread(target=self.update_image_frame, daemon=True)
-        self.capture_image_thread.start()
-        self.update_frame_thread.start()
-
-    def stop_camera_stream(self):
-        self.capturing_event.set()
-
-    def init_gui(self):
-        self.camera_settings_frame = None
-        self.init_buttons()
+        self.styles = styles
+        self.position_and_size = position_and_size
         self.init_image_frame()
 
-
     def init_image_frame(self):
-        self.image_frame = tk.Label(self.root , bd=0)
-        self.image_frame.place(anchor="center" ,relx=0.5 , rely=0.575)
+        self.image_frame = tk.Label(self.root , self.styles)
+        self.image_frame.place(self.position_and_size)
+        self.image_frame.bind("<Button-1>" , lambda e: self.camera.switch_crosshair())
 
-        frame_default_image = ImageTk.PhotoImage(Image.open(IMAGES['no_photo']))
-        self.image_frame.config(image=frame_default_image)
-        self.image_frame.image = frame_default_image
-        self.image_frame.lower()
+        self.video_editor_image = ImageTk.PhotoImage(Image.open("assets/video_editor.png").resize((25,25)))
+        self.video_editor_button = tk.Button(self.root , image=self.video_editor_image , command=self.open_video_editor)
+        self.video_editor_button.place(
+            relx=1.0,
+            rely=1.0,
+            x=-self.video_editor_button.winfo_reqwidth() - 5,
+            y=-self.video_editor_button.winfo_reqheight() - 5,
+        )
 
-    def init_buttons(self):
-        button_size = (50, 50)
+
+    def open_video_editor(self):
+        self.video_editor.place(relx=0.5 , rely=0.5, anchor="center", relwidth=1, relheight=1)
+        self.video_editor.lift()
+
+
+class TriggerPanelContainer():
+
+    def __init__(
+        self,
+        root: tk.Tk,
+        camera: Camera,
+        styles: dict,
+        position_and_size={
+            "relx": 0.0,
+            "rely": 0.1,
+            "x": 0,
+            "y": 0,
+            "relwidth": 0.1,
+            "relheight": 0.9,
+        },
+    ):
+        self.root = root
+        self.camera = camera
+        self.styles = styles
+        self.position_and_size = position_and_size
+
+
+        self.SOFTWARE_trigger_enabled = True
+        self.LINE0_trigger_enabled = False
+        self.LINE2_trigger_enabled = False
+
+        self.button_size = self.styles.get("button_size" , (50,50))
+
+        self.init_trigger_panel()
+
+    def init_trigger_panel(self):
+        self.trigger_panel_frame = tk.Frame(self.root)
+        self.trigger_panel_frame.place(self.position_and_size)
+
+        self.trigger_button_image = ImageTk.PhotoImage(Image.open("assets/trigger.png").resize((40,40)))
+        self.trigger_button = tk.Button(self.trigger_panel_frame, command=self.switch_trigger, image=self.trigger_button_image)
+        self.trigger_button.place(relx=0.5 , rely=0.5 , anchor="center")
+
+        self.trigger_text = tk.Label(self.trigger_panel_frame, text="SOFTWARE" , font=("Verdana" , 12) , bd=0)
+        self.trigger_text.place(relx=0.5, rely=0.5 , anchor="center", y = -self.trigger_button.winfo_reqheight())
+
+
+    def switch_trigger(self):
+        if self.SOFTWARE_trigger_enabled:
+            self.camera.switch_trigger(self.trigger_button , GxTriggerSourceEntry.SOFTWARE)
+        elif self.LINE0_trigger_enabled:
+            self.camera.switch_trigger(self.trigger_button , GxTriggerSourceEntry.LINE0)
+        elif self.LINE2_trigger_enabled:
+            self.camera.switch_trigger(self.trigger_button, GxTriggerSourceEntry.LINE2)
+
+
+class ControlPanelContainer():
+
+    def __init__(
+        self,
+        root: tk.Tk,
+        camera: Camera,
+        styles: dict,
+        image_view: ImageViewContainer,
+        trigger_panel:TriggerPanelContainer,
+        position_and_size={
+            "relx": 0.0,
+            "rely": 0.0,
+            "x": 0,
+            "y": 0,
+            "relwidth": 1.0,
+            "relheight": 0.1,
+        },
+    ):
+        self.root = root
+        self.camera = camera
+        self.image_view = image_view
+        self.trigger_panel = trigger_panel
+        self.styles = styles
+        self.position_and_size = position_and_size
+
+        self.button_size = self.styles.get("button_size" , (25,25))
+        self.camera_settings_window_enabled = False
+        self.play_pause_index =0
+
+        self.settings_buttons:list[tk.Button] = []
+        self.settings_type = None
+
+        self.init_control_panel()
+        self.init_camera_settings_window()
+
+    def init_control_panel(self):
+        image_paths = {
+            "play_pause": ["assets/play_button.png", "assets/pause_button.png"],
+            "white_balance": "assets/white_balance.png",
+            "crosshair": "assets/crosshair.png",
+            "flip_h": "assets/flip_h.png",
+            "flip_v": "assets/flip_v.png",
+            "rotate_right": "assets/rotate_to_right.png",
+            "rotate_left": "assets/rotate_to_left.png",
+            "settings": "assets/settings.png",
+        }
         self.play_pause_images = [
-            ImageTk.PhotoImage(Image.open(img).resize(button_size))
-            for img in IMAGES['play_pause']
+            ImageTk.PhotoImage(Image.open(img).resize(self.button_size))
+            for img in image_paths["play_pause"]
         ]
-        
-        self.white_balance_image = ImageTk.PhotoImage(Image.open(IMAGES['white_balance']).resize(button_size))
-        self.crosshair_image = ImageTk.PhotoImage(Image.open(IMAGES['crosshair']).resize(button_size))
-        self.flip_h_image = ImageTk.PhotoImage(Image.open(IMAGES['flip_h']).resize(button_size))
-        self.flip_v_image = ImageTk.PhotoImage(Image.open(IMAGES['flip_v']).resize(button_size))
-        self.rotate_right_image = ImageTk.PhotoImage(Image.open(IMAGES['rotate_right']).resize(button_size))
-        self.rotate_left_image = ImageTk.PhotoImage(Image.open(IMAGES['rotate_left']).resize(button_size))
 
-        buttons_frame = tk.LabelFrame(self.root, padx=5, pady=5, bg="#A9A9A9")
-        buttons_frame.place(relx=0, rely=0, relwidth=0.45, relheight=0.15)
+        self.wbalance_image = ImageTk.PhotoImage(
+            Image.open(image_paths["white_balance"]).resize(self.button_size)
+        )
+        self.crosshair_image = ImageTk.PhotoImage(
+            Image.open(image_paths["crosshair"]).resize(self.button_size)
+        )
+        self.flip_h_image = ImageTk.PhotoImage(
+            Image.open(image_paths["flip_h"]).resize(self.button_size)
+        )
+        self.flip_v_image = ImageTk.PhotoImage(
+            Image.open(image_paths["flip_v"]).resize(self.button_size)
+        )
+        self.rotate_right_image = ImageTk.PhotoImage(
+            Image.open(image_paths["rotate_right"]).resize(self.button_size)
+        )
+        self.rotate_left_image = ImageTk.PhotoImage(
+            Image.open(image_paths["rotate_left"]).resize(self.button_size)
+        )
+        self.settings_image = ImageTk.PhotoImage(
+            Image.open(image_paths["settings"]).resize(self.button_size)
+        )
 
-        switch_frame = tk.LabelFrame(self.root, padx=5, pady=5, bg="#A9A9A9")
-        switch_frame.place(relx=0.45, rely=0, relwidth=0.55, relheight=0.15)
+        self.control_panel_frame = tk.Frame(self.root)
+        self.control_panel_frame.place(self.position_and_size)
+        self.control_panel_placing = {"sticky": "ew", "pady": 10, "padx": 5}
 
-        self.on_off_button = tk.Button(
-            buttons_frame,
+        self.play_pause_button = tk.Button(
+            self.control_panel_frame,
             image=self.play_pause_images[self.play_pause_index],
-            command=self.switch_camera_recording_mode,
+            command=self.play_pause_button_clicked,
         )
         self.wbalance_button = tk.Button(
-            buttons_frame,
-            image=self.white_balance_image,
-            command=self.switch_wbalance_button,
+            self.control_panel_frame,
+            image=self.wbalance_image,
+            command=self.camera.switch_white_balance,
         )
         self.crosshair_button = tk.Button(
-            buttons_frame, 
-            image=self.crosshair_image, 
-            command=self.switch_crosshair
+            self.control_panel_frame,
+            image=self.crosshair_image,
+            command=self.camera.switch_crosshair,
         )
-
         self.flip_h_button = tk.Button(
-            buttons_frame, 
-            image=self.flip_h_image, 
-            command=self.flip_h
+            self.control_panel_frame, image=self.flip_h_image, command=self.camera.flip_image_horizontally
         )
         self.flip_v_button = tk.Button(
-            buttons_frame, 
-            image=self.flip_v_image, 
-            command=self.flip_v
+            self.control_panel_frame, image=self.flip_v_image, command=self.camera.flip_image_vertically
         )
         self.rotate_right_button = tk.Button(
-            buttons_frame, 
-            image=self.rotate_right_image, 
-            command=self.rotate_right
+            self.control_panel_frame,
+            image=self.rotate_right_image,
+            command=self.camera.rotate_image_right,
         )
         self.rotate_left_button = tk.Button(
-            buttons_frame, 
-            image=self.rotate_left_image, 
-            command=self.rotate_left
+            self.control_panel_frame, image=self.rotate_left_image, command=self.camera.rotate_image_left
         )
-
-        self.on_off_button.pack(side="left", pady=10, padx=5, anchor="center")
-        self.wbalance_button.pack(side="left", pady=10, padx=5, anchor="center")
-        self.crosshair_button.pack(side="left", pady=10, padx=5, anchor="center")
-        self.flip_h_button.pack(side="left", pady=10, padx=5, anchor="center")
-        self.flip_v_button.pack(side="left", pady=10, padx=5, anchor="center")
-        self.rotate_left_button.pack(side="left", pady=10, padx=5, anchor="center")
-        self.rotate_right_button.pack(side="left", pady=10, padx=5, anchor="center")
+        for i, widget in enumerate(
+            [
+                self.play_pause_button,
+                self.wbalance_button,
+                self.crosshair_button,
+                self.flip_h_button,
+                self.flip_v_button,
+                self.rotate_right_button,
+                self.rotate_left_button,
+            ]
+        ):
+            widget.grid(row=0, column=i, **self.control_panel_placing)
 
         self.settings_button = tk.Button(
-            switch_frame,
-            text="Settings",
+            self.control_panel_frame,
+            image=self.settings_image,
+            font=("Arial", 12),
             command=self.switch_camera_settings_window,
         )
-        self.trigger_button = tk.Button(
-            switch_frame, text="Trigger", command=self.switch_camera_trigger_mode
+
+        self.settings_button.place(
+            relx=1.0,
+            rely=0.5,
+            x=-self.settings_button.winfo_reqwidth() - 15,
+            anchor="center",
         )
-        self.settings_button.pack(side="right", anchor="center", padx=25, pady=(25, 0))
-        self.trigger_button.pack(side="left", anchor="center", padx=25, pady=25)
+
+    def init_camera_settings_window(self):
+        self.camera_settings_frame = tk.LabelFrame(
+            self.root,
+            bd=2,
+            relief=tk.SOLID,
+            bg="#88bdf2",
+            padx=2.5,
+            pady=2.5,
+            font=("Arial", 10),
+        )
+        button_size = (30, 30)
+        self.delete_image = ImageTk.PhotoImage(
+            Image.open("assets/delete.png").resize(button_size)
+        )
+        self.add_image = ImageTk.PhotoImage(
+            Image.open("assets/add.png").resize(button_size)
+        )
+        self.save_image = ImageTk.PhotoImage(
+            Image.open("assets/save.png").resize(self.button_size)
+        )
+
+        self.SOFTWARE_trigger_button = tk.Button(
+            self.camera_settings_frame,
+            text="SOFTWARE",
+            state="active",
+            bg="white",
+            activebackground="white",
+            command=lambda: self.switch_trigger_button(
+                self.SOFTWARE_trigger_button, "SOFTWARE"
+            ),
+            font=("Verdana", 12)
+        )
+        self.LINE0_trigger_button = tk.Button(
+            self.camera_settings_frame,
+            text="LINE0",
+            state="normal",
+            command=lambda: self.switch_trigger_button(
+                self.LINE0_trigger_button, "LINE0"
+            ),
+            font=("Verdana", 12)
+        )
+        self.LINE2_trigger_button = tk.Button(
+            self.camera_settings_frame,
+            text="LINE2",
+            state="normal",
+            command=lambda: self.switch_trigger_button(
+                self.LINE2_trigger_button, "LINE2"
+            ),
+            font=("Verdana", 12)
+        )
+
+        self.SOFTWARE_trigger_button.grid(row=0, column=0, sticky="ew")
+        self.LINE0_trigger_button.grid(row=0, column=1,sticky="ew")
+        self.LINE2_trigger_button.grid(row=0, column=2,sticky="ew")
+
+        self.colored_button = tk.Button(
+            self.camera_settings_frame,
+            text="Colored",
+            state="normal",
+            command=lambda: self.switch_color("COLOR"),
+            width=10,
+            font=("Verdana" , 12)
+        )
+        self.mono_button = tk.Button(
+            self.camera_settings_frame,
+            text="Mono",
+            state="normal",
+            command=lambda: self.switch_color("MONO"),
+            width=10,
+            font=("Verdana" , 12)
+        )
+        if self.camera.isColored:
+            self.colored_button.config(bg="white", activebackground="white", state="active")
+        else:
+            self.mono_button.config(bg="white", activebackground="white", state="active")
+
+
+        self.colored_button.grid(row=1, column=0, columnspan=2)
+        self.mono_button.grid(row=1, column=1, columnspan=2)
+        self.init_sliders(self.camera_settings_frame)
+        self.sliders_frame.grid(row=2, sticky="ew", column=0, columnspan=3)
+
+        self.apply_settings_button = tk.Button(
+            self.camera_settings_frame,
+            image=self.save_image,
+            command=self.apply_settings_button_clicked,
+        ).grid(row=3, column=1)
+        self.camera_settings_frame.update_idletasks()
+        self.camera_settings_frame.place_forget()
+
+    def switch_trigger_button(self, button:tk.Button, command:str):
+        trigger_buttons = [
+        self.SOFTWARE_trigger_button,
+        self.LINE0_trigger_button,
+        self.LINE2_trigger_button
+        ]
+
+        for btn in trigger_buttons:
+            btn.config(bg="SystemButtonFace", activebackground="SystemButtonFace", state="normal") 
+
+        button.config(bg="white",activebackground="white", state="active")
+        self.trigger_panel.trigger_text.config(text=command.upper())
+        command_states = {
+            "software": (True, False, False, False),
+            "line0": (False, True, False, False),
+            "line2": (False, False, True, False),
+            "external": (False, False, False, True) 
+        }
+        command=command.lower()
+        if command in command_states:
+            s , l0 , l1 , ext = command_states[command]
+            self.trigger_panel.SOFTWARE_trigger_enabled = s
+            self.trigger_panel.LINE0_trigger_enabled = l0
+            self.trigger_panel.LINE2_trigger_enabled = l1
+
+    def init_sliders(self, frame):
+        self.sliders_frame = tk.LabelFrame(
+            frame,
+            bd=2,
+            relief="ridge",
+            font=("Segoe UI", 11, "bold"),
+            foreground="#2E3440",
+            background="#e3f0fc",
+            highlightbackground="#8fa8c2",
+            highlightthickness=1,
+        )
+        width_range = self.camera.Width.get_range()
+        height_range = self.camera.Height.get_range()
+        exposure_time_range = self.camera.ExposureTime.get_range()
+        exposure_time_range["max"]=20000
+        fps_range = self.camera.FrameRate.get_range()
+        gain_range = self.camera.Gain.get_range()
+
+        self.width_slider, self.width_entry, _ , _= add_slider_with_entry(
+            self.sliders_frame,
+            label_text="Width",
+            slider_range=width_range,
+            row=1,
+            initial_value=self.camera.Width.get(),
+        )
+        self.height_slider, self.height_entry, _ , _= add_slider_with_entry(
+            self.sliders_frame,
+            "Height",
+            slider_range=height_range,
+            row=2,
+            initial_value=self.camera.Height.get(),
+        )
+        self.exposure_time_slider, self.exposure_time_entry, _, _ = add_slider_with_entry(
+            self.sliders_frame,
+            "Exposure Time",
+            slider_range=exposure_time_range,
+            row=3,
+            initial_value=self.camera.ExposureTime.get(),
+        )
+        self.fps_slider, self.fps_entry, _, _ = add_slider_with_entry(
+            self.sliders_frame,
+            "FrameRate",
+            slider_range=fps_range,
+            row=4,
+            initial_value=self.camera.FrameRate.get(),
+        )
+        self.gain_slider, self.gain_entry,_ , _= add_slider_with_entry(
+            self.sliders_frame,
+            "Gain",
+            slider_range=gain_range,
+            row=5,
+            initial_value=self.camera.Gain.get(),
+        )
+
+        trigger_time_range = {"min": 0.1, "max": 1.0, "inc": 0.02}
+
+        self.trigger_time_slider, self.trigger_time_entry,self.trigger_time_checkbutton,self.trigger_var = add_slider_with_entry(
+            self.sliders_frame,
+            "TriggerTime",
+            slider_range=trigger_time_range,
+            row=6,
+            initial_value=self.camera.trigger_time,
+            chkbutton=True,
+            chkbutton_initial=self.camera.trigger_time_enabled
+        )
+
+        quantity_of_frames_range = {"min" :10 , "max" : 1000, "inc" : 1}
+        self.quantity_of_frames_slider, self.number_of_frames_entry,self.frames_checkbutton, self.frames_var = (
+            add_slider_with_entry(
+                self.sliders_frame,
+                "NumberOfFrames",
+                slider_range=quantity_of_frames_range,
+                row=7,
+                initial_value=self.camera.quantity_of_frames,
+                chkbutton=True,
+                chkbutton_initial=self.camera.quantity_of_frames_enabled
+            )
+        )
+    
 
     def switch_camera_settings_window(self):
-        if self.camera_settings_frame is not None:
-            self.camera_settings_frame.place_forget()
-            self.camera_settings_frame = None
-        else:
-            self.camera_settings_frame = tk.LabelFrame(
-                self.root, bd=2, relief=tk.SOLID, padx=2.5, pady=2.5, bg="silver"
-            )
-
-            width_slider, _ = add_slider_with_entry(
-                self.camera_settings_frame,
-                "Image Width",
-                64,
-                1440,
-                row=0,
-                initial_value=800,
-                inc=8,
-            )
-            height_slider, _ = add_slider_with_entry(
-                self.camera_settings_frame,
-                "Image Height",
-                4,
-                1080,
-                row=1,
-                initial_value=600,
-                inc=2,
-            )
-            exposure_time_slider, _ = add_slider_with_entry(
-                self.camera_settings_frame,
-                "Exposure Time",
-                1000,
-                100000,
-                row=2,
-                initial_value=10000,
-            )
-            fps_slider, _ = add_slider_with_entry(
-                self.camera_settings_frame, "FPS", 0.1, 100, row=3, initial_value=60
-            )
-            gain_slider, _ = add_slider_with_entry(
-                self.camera_settings_frame, "Gain", 0.0, 24.0, row=4, initial_value=24.0
-            )
-
-            def save_parameters():
-                try:
-                    if self.camera.is_recording:
-                        self.camera.cam.stream_off()
-
-                    width = width_slider.get()
-                    height = height_slider.get()
-                    exposure_time = exposure_time_slider.get()
-                    fps = fps_slider.get()
-                    gain = gain_slider.get()
-
-
-                    self.camera.width.set(width)
-                    self.camera.height.set(height)
-                    self.camera.exposure_time.set(float(exposure_time))
-                    self.camera.framerate.set(float(fps))
-                    self.camera.gain.set(float(gain))
-                    self.camera.settings_implemented = True
-                    self.camera.cam.stream_on()
-                    print(f"{self.camera.get_settings()}")
-                except Exception as e:
-                    messagebox.showerror(
-                        "Ошибка", f"Ошибка при сохранении файла \n{str(e)}"
-                    )
-
-            tk.Button(
-                self.camera_settings_frame, text="Сохранить", command=save_parameters
-            ).grid(row=7, column=0, columnspan=2, pady=10)
-
-            self.camera_settings_frame.update_idletasks()
+        self.camera_settings_window_enabled = not self.camera_settings_window_enabled
+        if self.camera_settings_window_enabled:
             frame_width = self.camera_settings_frame.winfo_reqwidth()
             frame_height = self.camera_settings_frame.winfo_reqheight()
+            self.camera_settings_frame.place(
+                x=-frame_width - 5,
+                relx=1.0,
+                y=self.settings_button.winfo_y()
+                + self.settings_button.winfo_reqheight()
+                + 15,
+            )
+            self.camera_settings_frame.place(
+                x=-frame_width - 5,
+                relx=1.0,
+                y=self.settings_button.winfo_y()
+                + self.settings_button.winfo_reqheight()
+                + 15,
+            )
+        else:
+            self.camera_settings_frame.place_forget()
 
-            self.camera_settings_frame.place(x=-frame_width - 5, relx=1.0, rely=0.15)
+    def update_settings_window(self , preset):
+        update_slider_with_entry(preset["width"], self.width_slider, self.width_entry)
+        update_slider_with_entry(
+            preset["height"], self.height_slider, self.height_entry
+        )
+        update_slider_with_entry(
+            preset["exposure_time"], self.exposure_time_slider, self.exposure_time_entry
+        )
+        update_slider_with_entry(preset["fps"], self.fps_slider, self.fps_entry)
+        update_slider_with_entry(preset["gain"], self.gain_slider, self.gain_entry)
+        update_slider_with_entry(
+            preset["trigger_time"], self.trigger_time_slider, self.trigger_time_entry
+        )
 
-    def on_closing(self):
-        self.capturing_event.set()
-        self.saving_event.set()
-        self.camera.close()
-        self.root.destroy()
+    def get_preset_from_sliders(self) -> dict[str, float]:
+        preset = {
+            "width": int(self.width_slider.get()),
+            "height": int(self.height_slider.get()),
+            "exposure_time": float(self.exposure_time_slider.get()),
+            "fps": float(self.fps_slider.get()),
+            "gain": float(self.gain_slider.get()),
+            "trigger_time": float(self.trigger_time_slider.get()),
+            "quantity_of_frames" : int(self.quantity_of_frames_slider.get())
+        }
+        return preset
 
-    def switch_wbalance_button(self):
-        self.camera.switch_white_balance()
+    def apply_settings_button_clicked(self):
+        preset = self.get_preset_from_sliders()
+        default_preset = preset.copy()
+        default_preset['fps'] = 30.0
+        trigger_preset = preset
+        trigger_preset['fps'] = self.camera.FrameRate.get_range().get("max")
+        self.camera.apply_settings_clicked(default_preset)
+        self.camera.update_trigger_preset(trigger_preset)
+        self.camera.trigger_time_enabled = self.trigger_var.get()
+        self.camera.quantity_of_frames_enabled = self.frames_var.get()
 
-    def add_crosshair(self, image: Image.Image) -> Image.Image:
-        try:
-            img = image.copy()
-            draw = ImageDraw.Draw(img)
-            width, height = img.size
+    def play_pause_button_clicked(self):
+        self.play_pause_index = 1 - self.play_pause_index
+        self.play_pause_button.config(image=self.play_pause_images[self.play_pause_index])
+        self.play_pause_button.image = self.play_pause_images[self.play_pause_index]
+        self.camera.switch_capture()
 
-            line_color = (255, 0, 0)
-            draw.line([(0, height / 2), (width, height / 2)], fill=line_color, width=2)
-            draw.line([(width / 2, 0), (width / 2, height)], fill=line_color, width=2)
-            return img
-        except Exception as e:
-            print(f"Error : {str(e)}")
-        return image
+    def switch_color(self, command:str):
+        if command == "COLOR":
+            self.mono_button.config(bg="SystemButtonFace", activebackground="SystemButtonFace", state="normal")
+            self.colored_button.config( bg="white", activebackground="white", state="active")
+            self.camera.isColored=True
+        elif command == "MONO":
+            self.colored_button.config(bg="SystemButtonFace", activebackground="SystemButtonFace", state="normal")
+            self.mono_button.config( bg="white", activebackground="white", state="active")
+            self.camera.isColored=False
 
-    def switch_crosshair(self):
-        self.crosshair_enabled = not self.crosshair_enabled
-        print(f"Crosshair {"ON" if self.crosshair_enabled else "OFF"}")
+class GUI:
 
-    def rotate_right(self):
-        self.image_angle -= 90
-        if self.image_angle == -360:
-            self.image_angle = 0
-        print(f"Rotate right \nCurrent angle = {self.image_angle}")
+    def __init__(self, root: tk.Tk = None):
+        self.root = root
+        self.video_editor = VideoEditor(self.root)
+        self.camera = Camera(self.root,  self.video_editor)
+        self.styles = {}
+        self.image_view = ImageViewContainer(self.root, self.video_editor,self.styles ,self.camera)
+        self.camera.load_image_frame(self.image_view.image_frame)
 
-    def rotate_left(self):
-        self.image_angle += 90
-        if self.image_angle == 360:
-            self.image_angle = 0
-        print(f"Rotate left \nCurrent angle = {self.image_angle}")
+        self.trigger_panel = TriggerPanelContainer(
+            self.root, self.camera,  self.styles
+        )
+        self.control_panel = ControlPanelContainer(
+            self.root, self.camera,  self.styles, self.image_view, self.trigger_panel
+        )
 
-    def flip_v(self):
-        print(f"flipped top/bottom")
-        self.flip_v_enabled = not self.flip_v_enabled
+        self.themes = {
+            "RetroCream" : {
+                "control_panel" : "#fff3e0",
+                "trigger_panel" : "#f5e6d3",
+                "image_frame" : "#faf4ed",
+            },
+            "Nature" : {
+                "control_panel" : "#3a6351",
+                "trigger_panel" : "#f2e8cf",
+                "image_frame" : "#e4dccf"
+            },
+            "CyberPunk": {
+                "control_panel" : "#1a1a1a",
+                "trigger_panel" : "#2d2d2d",
+                "image_frame" : "#0a0a0a"
+            },
+            "ProDark" : {
+                "control_panel" : "#2b2b2b",
+                "trigger_panel" : "#363636",
+                "image_frame" : "#212121"
+            }
+        }
+        self.apply_theme(self.themes['Nature'])
+        self.init_themes()
 
-    def flip_h(self):
-        print(f"flipped left/right")
-        self.flip_h_enabled = not self.flip_h_enabled
+
+    def init_themes(self):
+        self.themes_combobox = ttk.Combobox(self.root)
+        self.themes_combobox.place(relx=0 , rely=1.0 , y = -25 , relwidth=0.1)
+        keys = self.themes.keys()
+        keys = list(keys)
+        self.themes_combobox['values'] = keys
+        self.themes_combobox.bind("<<ComboboxSelected>>", self.theme_selected)
+
+    def apply_theme(self, theme):
+        self.control_panel.control_panel_frame.config(bg=theme['control_panel'])
+        self.trigger_panel.trigger_panel_frame.config(bg = theme["trigger_panel"])
+        self.image_view.image_frame.config(bg=theme['image_frame'])
+
+    def theme_selected(self, event = None):
+        theme_name = self.themes_combobox.get()
+        theme = self.themes[theme_name]
+        self.apply_theme(theme)
 
 
+def update_slider_with_entry(value, slider: tk.Scale, entry: tk.Entry):
+    slider.set(value)
+    entry.delete(0, "end")
+    entry.insert(0, str(value))
 
-def add_slider_with_entry(root: tk.Tk, label_text, from_, to, row, initial_value=None, inc=None):
-    tk.Label(root, text=label_text , font=("arial" , 11)).grid(row=row, column=0, padx=5, pady=5)
 
-    slider = tk.Scale(root, from_=from_, to=to, orient=tk.HORIZONTAL, resolution=inc)
-    slider.grid(row=row, column=1, padx=5, pady=5)
+def add_slider_with_entry(
+    root: tk.Tk,
+    label_text: str,
+    slider_range: dict,
+    row: int,
+    initial_value=None,
+    chkbutton: bool = False,
+    chkbutton_command=None,
+    chkbutton_initial:bool =False
+):
+    slider_label = tk.Label(
+        root, text=label_text, font=("Segoe UI", 11), bg="#e3f0fc", fg="#3B4252"
+    )
+
+    min_val = slider_range["min"]
+    max_val = slider_range["max"]
+    inc = slider_range["inc"]
+
+    slider = tk.Scale(
+        root,
+        from_=min_val,
+        to=max_val,
+        orient=tk.HORIZONTAL,
+        resolution=inc,
+        bg="#e3f0fc",
+        troughcolor="#c7d9f0",
+        activebackground="#aec5e0",
+        sliderrelief="flat",
+        width=12,
+        length=150,
+        font=("Segoe UI", 9),
+    )
+
     if initial_value is not None:
         slider.set(initial_value)
+    else:
+        slider.set(min_val)
 
-    entry = tk.Entry(root, width=10 , font=("arial",11))
-    entry.grid(row=row, column=2, padx=5, pady=5)
+    entry = tk.Entry(
+        root,
+        width=10,
+        font=("Segoe UI", 11),
+        bg="white",
+        highlightcolor="#8fa8c2",
+        fg="#2E3440",
+        relief="flat",
+        highlightthickness=1,
+        borderwidth=0,
+    )
     entry.insert(0, slider.get())
 
-    def update_entry(*args):
+
+    if chkbutton:
+        var = tk.BooleanVar(value=chkbutton_initial)
+        checkbutton = tk.Checkbutton(root, command=chkbutton_command, variable=var)
+        checkbutton.var = var
+        checkbutton.grid(row=row, column=0, sticky="w")
+
+    else:
+        checkbutton = None
+        var = None
+
+    slider_label.grid(row=row, column=1, padx=5, pady=5, sticky="w")
+    slider.grid(row=row, column=2)
+    entry.grid(row=row, column=3, padx=5, pady=5)
+
+    def update_entry(value=None):
+        if value is None:
+            value = slider.get()
         entry.delete(0, "end")
-        entry.insert(0, slider.get())
+        entry.insert(0, str(value))
+
+    def adjust_to_nearest_step(value, start, end, step):
+        if value < start:
+            return start
+        if value > end:
+            return end
+        offset = value - start
+        nearest_step = round(offset / step)
+        adjusted_value = start + nearest_step * step
+        return min(max(adjusted_value, start), end)
 
     def update_slider(event):
         try:
             value = float(entry.get())
-            if from_ <= value <= to:
-                slider.set(value)
+            if min_val <= value <= max_val:
+                adjusted = adjust_to_nearest_step(value, min_val, max_val, inc)
+                slider.set(adjusted)
+                update_entry(adjusted)
             else:
-                messagebox.showerror("Ошибка", "Вы ввели неправильное значение")
-                update_entry()
+                messagebox.showerror("Ошибка", "Значение вне допустимого диапазона.")
+                update_entry(slider.get())
         except ValueError:
-            pass
-    slider.config(command=update_entry)
+            messagebox.showerror("Ошибка", "Введите числовое значение.")
+            update_entry(slider.get())
+
+    slider.config(command=lambda val: update_entry())
     entry.bind("<Return>", update_slider)
 
-    return slider, entry
-
-
-def check_dir( dir = "output") -> str:
-    dirPath = dir + "/"
-    i=0
-    if os.path.exists(dirPath):
-            while os.path.exists(dirPath + "_" + str(i)):
-                print(f"Directory ---> {dirPath + "_" + str(i)} is not empty")
-                i += 1
-            destPath = dirPath + "_" + str(i)
-            print(f"Results directory ---> {destPath}")
-            os.makedirs(destPath)
-    else:
-        print(f"Directory ---> {str(dirPath - "/")} does not exist")
-    return destPath
+    return slider, entry, checkbutton, var
