@@ -20,16 +20,19 @@ class Camera:
         self.type = None
         self.devices:list[str] = []
 
-        self.settings_implemented = False
         self.is_recording = False
         self.is_triggered = False
+        self.isColored = False
+        self.SupportColorFormat = False
+        self.SupportMonoFormat = False
 
         self.trigger_time = 0.5
         self.trigger_time_enabled = False
+        self.trigger_start_time = None
         self.captured_frames = 0
         self.quantity_of_frames = 100
         self.quantity_of_frames_enabled = True
-        self.timeout = 2.0
+        self.timeout = 12.0
 
         self.trigger_event = Event()
         self.capture_event = Event()
@@ -56,6 +59,7 @@ class Camera:
                 for i in range(dev_num):
                     self.devices.append(dev_info_list[i].get("model_name"))
                 self.cam = self.device_manager.open_device_by_index(1)
+                
                 for i, device in enumerate(self.devices):
                     print(f"Device {i+1}: {device}")  
 
@@ -82,37 +86,46 @@ class Camera:
                 self.TriggerSoftware = self.FeatureControl.get_command_feature("TriggerSoftware")
                 self.LineMode = self.FeatureControl.get_enum_feature("LineMode")
                 self.CurrentFrameRate = self.FeatureControl.get_float_feature("CurrentAcquisitionFrameRate")
-
                 self.AcquisitionMode = self.FeatureControl.get_enum_feature("AcquisitionMode")
+
+                self.DeviceLinkThroughputLimit = self.FeatureControl.get_int_feature("DeviceLinkThroughputLimit")
+                self.DeviceLinkThroughputLimitMode  =self.FeatureControl.get_enum_feature("DeviceLinkThroughputLimitMode")
+                self.DeviceLinkThroughputLimitMode.set("OFF")
+                self.DeviceLinkThroughputLimit.set(self.DeviceLinkThroughputLimit.get_range()['max'])
+                self.DeviceReset = self.FeatureControl.get_command_feature("DeviceReset")
+
                 if self.type == "MER2":
                     self.AcquisitionBurstFrameCount = self.FeatureControl.get_int_feature("AcquisitionBurstFrameCount")
+                    self.ExposureTimeMode = self.FeatureControl.get_enum_feature("ExposureTimeMode")
 
-                self.PixelFormat = self.FeatureControl.get_enum_feature("PixelFormat").get()[0]
-                self.isColored =  self.PixelFormat not in (GxPixelFormatEntry.MONO8, GxPixelFormatEntry.BAYER_GR8, GxPixelFormatEntry.BAYER_RG8,
-                                                           GxPixelFormatEntry.BAYER_GB8,GxPixelFormatEntry.BAYER_BG8,GxPixelFormatEntry.RGB8,
-                                                           GxPixelFormatEntry.BGR8,GxPixelFormatEntry.R8,GxPixelFormatEntry.B8,
-                                                           GxPixelFormatEntry.G8,)
+                self.PixelFormats = self.FeatureControl.get_enum_feature("PixelFormat").get_range()
+                for pixel_format in self.PixelFormats:
+                    if gx.Utility.is_gray(pixel_format['value']):
+                        if not self.isColored:
+                            self.isColored = False
+                        self.SupportMonoFormat = True
+                    else:
+                        self.isColored = True
+                        self.SupportColorFormat = True
+                        self.SupportMonoFormat = True
+
                 self.default_preset = {
                     "width" : self.Width.get_range().get("max"),
-                    "height" : 200,
-                    "exposure_time" : 1000.0,
+                    "height" : 210,
+                    "exposure_time" :1000.0,
                     "fps": 30.0,
                     "gain" : self.Gain.get_range().get("max"),
+                    "trigger_delay" : self.TriggerDelay.get_range().get("min"),
                     "trigger_time" : self.trigger_time,
                     "quantity_of_frames" : self.quantity_of_frames,
                 }
-                self.trigger_preset = {
-                    "width" : self.Width.get_range().get("max"),
-                    "height" : 200,
-                    "exposure_time" : 1000.0,
-                    "fps" : self.FrameRate.get_range().get("max"),
-                    "gain" : self.Gain.get_range().get("max"),
-                    "trigger_time" : self.trigger_time,
-                    "quantity_of_frames" : self.quantity_of_frames,
-                }
+                self.trigger_preset = self.default_preset.copy()
+                self.trigger_preset['exposure_time'] = self.ExposureTime.get_range().get("min")
+                self.trigger_preset["fps"] = 1000.0
+                # print(self.cam.Pi)
                 self.general_standard_settings()
                 self.apply_preset(self.default_preset)
-                print(f"Camera {self.devices[0]} is synchronized")
+                print(f"The {self.devices[0]} is synchronized")
                 print(f"{"Colored" if self.isColored else "Mono"} Camera")
         except Exception as e:
             print(f"{str(e)}")
@@ -151,21 +164,19 @@ class Camera:
         self.TriggerMode.set("OFF")
 
     def general_trigger_settings(self , trigger_source:GxTriggerSourceEntry):
-        self.TriggerDelay.set(0.0)
-        self.FrameRateMode.set("OFF")
-
+        self.apply_preset(self.trigger_preset)
+        self.FrameRateMode.set("ON")
         if self.type == "MER2":
             self.TriggerSelector.set(GxTriggerSelectorEntry.FRAME_BURST_START)
-            self.AcquisitionBurstFrameCount.set(self.quantity_of_frames)
+            self.AcquisitionBurstFrameCount.set(self.AcquisitionBurstFrameCount.get_range().get("max"))
 
-        if trigger_source ==GxTriggerSourceEntry.SOFTWARE:
-            self.TriggerMode.set("OFF")
-        else:
-            self.LineMode.set(GxLineModeEntry.INPUT)
-            self.TriggerMode.set("ON")
+        self.LineMode.set("Input")
+        self.TriggerMode.set("ON")
 
         self.TriggerSource.set(trigger_source)
 
+    def update_default_preset(self, preset):
+        self.default_preset = preset
 
     def update_trigger_preset(self, preset):
         self.trigger_preset = preset
@@ -173,19 +184,28 @@ class Camera:
     def apply_preset(self, preset):
         self.Width.set(preset['width'])
         self.Height.set(preset['height'])
+
+        if self.type == "MER2":
+            if preset['exposure_time'] < 20:
+                self.ExposureTimeMode.set("UltraShort")
+            else:
+                self.ExposureTimeMode.set("Standard")
+
         self.ExposureTime.set(preset['exposure_time'])
         self.FrameRate.set(preset['fps'])
         self.Gain.set(preset['gain'])
+        self.TriggerDelay.set(preset['trigger_delay'])
         self.trigger_time = preset['trigger_time']
         self.quantity_of_frames = preset["quantity_of_frames"]
-
-
-    def apply_settings_clicked(self, preset):
+        
+    def apply_settings_clicked(self):
         was_recording = self.is_recording
         if was_recording:
             self.switch_capture()
-        self.apply_preset(preset)
-        self.default_preset = preset
+        self.apply_preset(self.trigger_preset)
+        self.image_view.current_fps_label.config(text = f"Current FPS : {self.CurrentFrameRate.get()}")
+        print(self.trigger_preset)
+        self.apply_preset(self.default_preset)
         if was_recording:
             self.switch_capture()
 
@@ -226,47 +246,48 @@ class Camera:
     def start_trigger(self, button:tk.Widget, trigger_source:GxTriggerSourceEntry):
         self.is_triggered = True
         self.capture_event.set()
+        self.trigger_start_time = None
         self.trigger_event.clear()
         self.images.clear()
         self.timestamps.clear()
+        
 
         change_calling_button(button, self.is_triggered)
 
         self.cam.stream_off()
-        self.apply_preset(self.trigger_preset)
-
-        current_fps = self.CurrentFrameRate.get()
-        print("    Current FPS: " + str(current_fps) + "\n")
-
-
-        if self.trigger_time_enabled and self.type == "MER2" and not self.quantity_of_frames_enabled:
-            self.quantity_of_frames = self.AcquisitionBurstFrameCount.get_range().get("max")
-
         self.general_trigger_settings(trigger_source)
         self.cam.stream_on()
 
         self.get_settings()
 
+        if trigger_source == GxTriggerSourceEntry.SOFTWARE:
+                self.TriggerSoftware.send_command()
+
         while not self.trigger_event.is_set():
             try:
-
+                if self.trigger_start_time:
+                    if time.perf_counter() - self.trigger_start_time > self.timeout:
+                        print("break due to timeout")
+                        break
+                
                 result = self.image_handling()  
                 if result is None:
                     continue
 
-                image, timestamp = result
 
-                if trigger_source != GxTriggerSourceEntry.SOFTWARE and self.type=="MER":
+                if self.type=="MER" and self.captured_frames ==0:
                     self.TriggerMode.set("OFF")
-                
 
-
+                image, timestamp = result
                 self.images.append(image)
 
                 if self.captured_frames == 0 :
                     self.timestamps.append(timestamp)
+                    self.trigger_start_time = time.perf_counter()
+                    self.captured_frames+=1
+                    continue
                 else:
-                    self.timestamps.append((timestamp - self.timestamps[0])/1000)
+                    self.timestamps.append(int(timestamp - self.timestamps[0])/1000)
                     
                     if self.trigger_time_enabled:
                         if self.timestamps[self.captured_frames] > self.trigger_time * 1e6:
@@ -276,12 +297,7 @@ class Camera:
                         if self.captured_frames+1 >= self.quantity_of_frames:
                             break
 
-                    
-                    if self.timestamps[self.captured_frames]> self.timeout * 1e6:
-                        break
-
-                self.captured_frames+=1
-
+                    self.captured_frames+=1
 
             except Exception as e:
                 pass
@@ -290,8 +306,6 @@ class Camera:
             self.timestamps[0] = 0.0
             print(f"Total frames recorded: {self.captured_frames + 1}")
             self.switch_trigger(button , trigger_source)
-
-
 
 
     def stop_trigger(self, button:tk.Widget,trigger_source:GxTriggerSourceEntry):
@@ -305,6 +319,7 @@ class Camera:
         self.check_trigger_completion()
         self.captured_frames = 0
         self.quantity_of_frames = None
+        self.root.after(3000 , lambda: Thread(target=self.capture_and_display , daemon=True).start())
 
     def save_images(self):
         output_dir = check_dir("output")
@@ -320,8 +335,9 @@ class Camera:
         Thread(target= lambda: self.video_editor.load_camera_data(self.images , self.timestamps), daemon=True).start()
 
 
-    def load_image_frame(self, image_frame):
-        self.image_frame = image_frame
+    def load_image_view(self, image_view):
+        self.image_view  = image_view
+        self.image_frame = self.image_view.image_frame
 
     def capture_and_display(self):
         while not self.capture_event.is_set():
@@ -335,8 +351,6 @@ class Camera:
                 continue
 
     def update_image_frame(self , image:Image.Image):
-
-        image = image.resize((image.width, image.height), Image.LANCZOS)
         image = ImageTk.PhotoImage(image)
         self.image_frame.config(image = image)
         self.image_frame.image = image
@@ -362,12 +376,12 @@ class Camera:
 
     def get_settings(self):
         if self.cam:
-            print(
-                f"    Image width : {self.Width.get()}    Image Height: {self.Height.get()}"
-            )
-            print(
-                f"    Exposure Time: {self.ExposureTime.get()}    Gain: {self.Gain.get()}       FrameRate : {self.FrameRate.get()}"
-            )
+            print(f"    Current FPS : {self.CurrentFrameRate.get()}      FrameRate : {self.FrameRate.get()}")
+            print(f"    Width : {self.Width.get()}    Height: {self.Height.get()}")
+            print(f"    Exposure Time: {self.ExposureTime.get()}    Gain: {self.Gain.get()} ")
+            print(f"    Trigger Delay : {self.TriggerDelay.get()}")
+            print(f"    Trigger Time Enabled : {self.trigger_time_enabled}")
+            print(f"    Quantity of Frames enabled : {self.quantity_of_frames_enabled}, quantity : {self.quantity_of_frames}")
             print("-------------------------------------------")
 
     def switch_capture(self):
@@ -410,6 +424,7 @@ class Camera:
     def close(self):
         if self.cam:
             print("Camera is off")
+            self.TriggerMode.set("OFF")
             self.cam.close_device()
 
 def add_crosshair(image: Image.Image) -> Image.Image:
@@ -423,7 +438,6 @@ def add_crosshair(image: Image.Image) -> Image.Image:
         [(width / 2, 0), (width / 2, height)], fill="red", width=2
     )
     return img
-
 
 def get_best_valid_bits(pixel_format):
     valid_bits = DxValidBit.BIT0_7
@@ -501,9 +515,9 @@ def get_best_valid_bits(pixel_format):
 
 def change_calling_button(button:tk.Button, calling_state:bool) :
     if calling_state:
-        button.config(bg='#90EE90', activebackground='#76EE76', state = "active",activeforeground="#90EE90")
+        button.config(bg='green', activebackground='green', state = "active",activeforeground="white", fg="white")
         return
-    button.config(bg="SystemButtonFace", activebackground='SystemButtonFace', state = "normal")
+    button.config(bg="SystemButtonFace", activebackground='SystemButtonFace', state = "normal", fg="black" , activeforeground="black")
 
 def check_dir(dir="output") -> str:
     dirPath = dir + "/"

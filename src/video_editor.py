@@ -210,7 +210,7 @@ class VideoEditor(tk.Frame):
 
     def init_settings_frame(self):
         self.settings_frame = tk.Frame(self)
-        self.settings_frame.place(relx=0 , rely=0 , relheight=0.8 , relwidth=0.2)
+        self.settings_frame.place(relx=0 , rely=0 , relheight=0.8 , relwidth=0.1)
 
         self.theme_combobox = ttk.Combobox(self.settings_frame, width=15)
         self.theme_combobox.place(relx=0 , rely=1.0 , y =-self.theme_combobox.winfo_reqheight() - 5 , x= 5)
@@ -244,10 +244,10 @@ class VideoEditor(tk.Frame):
         self.preview_button.bind("<Leave>", lambda e: self.preview_button_label.place_forget())
         self.preview_button_label.lift()
 
-        self.load_images_image = ImageTk.PhotoImage(Image.open("assets/load_from_file.png").resize((25,25)))
+        self.load_images_image = ImageTk.PhotoImage(Image.open("assets/add.png").resize((25,25)))
         self.load_images_button = tk.Button(self.settings_frame,image=self.load_images_image, command=self.load_images_from_file)
         self.load_images_button.image = self.load_images_image
-        self.load_images_button.grid(row=1, column=2, padx=5, pady=5, sticky="ew")
+        self.load_images_button.grid(row=3, column=0, padx=5, pady=5, sticky="ew")
 
         self.save_video_image = ImageTk.PhotoImage(Image.open("assets/save.png").resize((25,25)))
         self.save_video_button = tk.Button(self.settings_frame, image=self.save_video_image, command=self.export_video)
@@ -259,7 +259,7 @@ class VideoEditor(tk.Frame):
 
     def init_preview_frame(self):
         self.preview_frame = tk.Frame(self)
-        self.preview_frame.place(relx=0.2 , rely=0 , relheight=0.8 , relwidth=0.8)
+        self.preview_frame.place(relx=0.1 , rely=0 , relheight=0.8 , relwidth=0.9)
 
         previous_button = tk.Button(
             self.preview_frame,
@@ -398,18 +398,21 @@ class VideoEditor(tk.Frame):
         frame_width = self.preview_image.winfo_width()
         frame_height = self.preview_image.winfo_height()
 
-        if frame_width <= 1 or frame_height <= 1:
-            image_tk = ImageTk.PhotoImage(image)
-        else:
-            width_ratio = frame_width / image.width
-            height_ratio = frame_height / image.height
-            scale_ratio = min(width_ratio, height_ratio)
+        if frame_width <= 1:
+            frame_width = 400 
+        if frame_height <= 1:
+            frame_height = 300 
 
-            new_width = int(image.width * scale_ratio)
-            new_height = int(image.height * scale_ratio)
+        width_ratio = frame_width / image.width
+        height_ratio = frame_height / image.height
 
-            resized_image = image.resize((new_width, new_height), Image.LANCZOS)
-            image_tk = ImageTk.PhotoImage(resized_image)
+        scale_ratio = min(width_ratio, height_ratio)
+
+        new_width = int(image.width * scale_ratio)
+        new_height = int(image.height * scale_ratio)
+
+        resized_image = image.resize((new_width, new_height), Image.LANCZOS)
+        image_tk = ImageTk.PhotoImage(resized_image)
 
         self.preview_image.config(image=image_tk)
         self.preview_image.image = image_tk
@@ -471,28 +474,44 @@ class VideoEditor(tk.Frame):
             Thread(target = lambda: self.create_thumbnails(images), daemon=True).start()
 
     def delete_images(self):
-        self.timestamps.clear()
-        self.images.clear()
-        self.thumbnail_frames.clear()
-        self.original_images.clear()
-        self.image_index = 0
+        if hasattr(self, 'deleting_images') and self.deleting_images:
+            return
+    
+        try:
+            self.deleting_images = True 
 
-        for widget in self.thumbnail_container.winfo_children():
-            widget.destroy()
+            self.timestamps.clear()
+            self.images.clear()
+            self.thumbnail_frames.clear()
+            self.original_images.clear()
+            self.image_index = 0
 
-        no_image = tk.PhotoImage(file="assets/no_image.png")
-        self.preview_image.config(image=no_image)
-        self.preview_image.image = no_image
-        self.preview_text.config(text="Time: No image")
+            if self.thumbnail_container.winfo_exists(): 
+                for widget in self.thumbnail_container.winfo_children():
+                    if widget.winfo_exists(): 
+                        widget.destroy()
 
-        self.dual_scale.set_limits(1, 10)
+            if self.preview_image.winfo_exists():
+                no_image = tk.PhotoImage(file="assets/no_image.png")
+                self.preview_image.config(image=no_image)
+                self.preview_image.image = no_image
 
-        if self.trimming_window_enabled:
-            self.trimming_window.place_forget()
-            self.trimming_window_enabled = False
+            if self.preview_text.winfo_exists():
+                self.preview_text.config(text="Time: No image")
 
-        self.preview_video_enabled = False
-        self.preview_button.config(bg='SystemButtonFace', activebackground='SystemButtonFace')
+            if hasattr(self, 'dual_scale'):
+                self.dual_scale.set_limits(1, 10)
+
+            if self.trimming_window_enabled and hasattr(self, 'trimming_window'):
+                self.trimming_window.place_forget()
+                self.trimming_window_enabled = False
+
+            self.preview_video_enabled = False
+            if self.preview_button.winfo_exists():
+                self.preview_button.config(bg='SystemButtonFace', activebackground='SystemButtonFace')
+
+        finally:
+            self.deleting_images = False 
 
     def export_video(self):
         def save_video():
