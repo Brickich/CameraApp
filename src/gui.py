@@ -344,6 +344,8 @@ class ControlPanelContainer():
         fps_range['inc'] = 1.0
         gain_range = self.camera.Gain.get_range()
         gain_range['inc'] = 0.1
+        offsetX_range = self.camera.cam.OffsetX.get_range()
+        offsetY_range = self.camera.cam.OffsetY.get_range()
 
         self.width_slider, self.width_entry, _ , _= add_slider_with_entry(
             self.sliders_frame,
@@ -382,7 +384,7 @@ class ControlPanelContainer():
         )
 
         trigger_delay_range = self.camera.TriggerDelay.get_range()
-        trigger_delay_range['inc'] = 1.0
+        trigger_delay_range['inc'] = 0.01
         self.trigger_delay_slider,self.trigger_delay_entry , _ , _ = add_slider_with_entry(
             self.sliders_frame,
             "Trigger Delay, μs",
@@ -413,6 +415,20 @@ class ControlPanelContainer():
                 chkbutton=True,
                 chkbutton_initial=self.camera.quantity_of_frames_enabled
             )
+        )
+        self.offsetX_slider , self.offsetX_entry , _ , _ = add_slider_with_entry(
+            self.sliders_frame,
+            "OffsetX",
+            slider_range= offsetX_range,
+            row= 9 , 
+            initial_value= self.camera.cam.OffsetX.get(),
+        )
+        self.offsetY_slider , self.offsetY_entry , _ , _ = add_slider_with_entry(
+            self.sliders_frame , 
+            "OffsetY",
+            slider_range= offsetY_range ,
+            row = 10 ,
+            initial_value=self.camera.cam.OffsetY.get()
         )
 
     def switch_camera_settings_window(self):
@@ -447,6 +463,8 @@ class ControlPanelContainer():
             "trigger_delay" : float(self.trigger_delay_entry.get()),
             "trigger_time": float(self.trigger_time_entry.get()),
             "quantity_of_frames" : int(self.quantity_of_frames_entry.get()),
+            "offsetX" : int(self.offsetX_entry.get()),
+            "offsetY" : int(self.offsetY_entry.get()),
         }
         return preset
 

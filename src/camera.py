@@ -8,12 +8,13 @@ from threading import Event , Thread
 import time
 from .video_editor import VideoEditor
 from typing import Any
+import cv2
 
 
 class Camera:
     def __init__(self , root:tk.Tk, video_editor:VideoEditor):
         super().__init__()
-        self.device_manager = gx.DeviceManager()
+        
         self.video_editor = video_editor
         self.root = root
         self.cam = None
@@ -40,14 +41,19 @@ class Camera:
         self.flip_h_enabled = False
         self.flip_v_enabled = False
         self.image_angle =0 
+        self.offsetX = 0
+        self.offsetY = 0
 
         self.images:list[Image.Image] =[]
         self.timestamps:list[float] = []
+        
+        self.device_manager = gx.DeviceManager()
 
-        self.init_device()
+        self.init_device() 
 
     def init_device(self):
-        try:
+        try: 
+            
             dev_num, dev_info_list = self.device_manager.update_device_list()
 
             # self.image_process = self.device_manager.create_image_process()
@@ -78,10 +84,15 @@ class Camera:
                 self.ExposureTime = self.FeatureControl.get_float_feature("ExposureTime")
                 self.Gain = self.FeatureControl.get_float_feature("Gain")
                 self.FrameRate = self.FeatureControl.get_float_feature("AcquisitionFrameRate")
+
                 self.TriggerMode = self.FeatureControl.get_enum_feature("TriggerMode")
                 self.TriggerSource = self.FeatureControl.get_enum_feature("TriggerSource")
                 self.TriggerDelay = self.FeatureControl.get_float_feature("TriggerDelay")
                 self.TriggerSelector = self.FeatureControl.get_enum_feature("TriggerSelector")
+                self.TriggerActivation = self.FeatureControl.get_enum_feature("TriggerActivation")
+                # print(self.cam.TriggerActivation.get_range())
+                # print(self.TriggerActivation.get())
+
                 self.FrameRateMode = self.FeatureControl.get_enum_feature("AcquisitionFrameRateMode")
                 self.TriggerSoftware = self.FeatureControl.get_command_feature("TriggerSoftware")
                 self.LineMode = self.FeatureControl.get_enum_feature("LineMode")
@@ -89,9 +100,9 @@ class Camera:
                 self.AcquisitionMode = self.FeatureControl.get_enum_feature("AcquisitionMode")
 
                 self.DeviceLinkThroughputLimit = self.FeatureControl.get_int_feature("DeviceLinkThroughputLimit")
+                self.DeviceLinkThroughputLimit.set(self.DeviceLinkThroughputLimit.get_range()['max'])
                 self.DeviceLinkThroughputLimitMode  =self.FeatureControl.get_enum_feature("DeviceLinkThroughputLimitMode")
                 self.DeviceLinkThroughputLimitMode.set("OFF")
-                self.DeviceLinkThroughputLimit.set(self.DeviceLinkThroughputLimit.get_range()['max'])
                 self.DeviceReset = self.FeatureControl.get_command_feature("DeviceReset")
 
                 if self.type == "MER2":
@@ -118,11 +129,13 @@ class Camera:
                     "trigger_delay" : self.TriggerDelay.get_range().get("min"),
                     "trigger_time" : self.trigger_time,
                     "quantity_of_frames" : self.quantity_of_frames,
+                    "offsetX" : self.offsetX , 
+                    "offsetY" : self.offsetY,
                 }
                 self.trigger_preset = self.default_preset.copy()
                 self.trigger_preset['exposure_time'] = self.ExposureTime.get_range().get("min")
                 self.trigger_preset["fps"] = 1000.0
-                # print(self.cam.Pi)
+
                 self.general_standard_settings()
                 self.apply_preset(self.default_preset)
                 print(f"The {self.devices[0]} is synchronized")
@@ -165,6 +178,7 @@ class Camera:
 
     def general_trigger_settings(self , trigger_source:GxTriggerSourceEntry):
         self.apply_preset(self.trigger_preset)
+        self.TriggerActivation.set(GxTriggerActivationEntry.FALLINGEDGE)
         self.FrameRateMode.set("ON")
         if self.type == "MER2":
             self.TriggerSelector.set(GxTriggerSelectorEntry.FRAME_BURST_START)
@@ -197,6 +211,8 @@ class Camera:
         self.TriggerDelay.set(preset['trigger_delay'])
         self.trigger_time = preset['trigger_time']
         self.quantity_of_frames = preset["quantity_of_frames"]
+        self.cam.OffsetX.set(preset['offsetX'])
+        self.cam.OffsetY.set(preset['offsetY'])
         
     def apply_settings_clicked(self):
         was_recording = self.is_recording
@@ -308,7 +324,7 @@ class Camera:
             self.switch_trigger(button , trigger_source)
 
 
-    def stop_trigger(self, button:tk.Widget,trigger_source:GxTriggerSourceEntry):
+    def stop_trigger(self, button:tk.Widget, trigger_source:GxTriggerSourceEntry):
         self.trigger_event.set()
         self.capture_event.clear()
         change_calling_button(button, self.is_triggered)
@@ -339,6 +355,12 @@ class Camera:
         self.image_view  = image_view
         self.image_frame = self.image_view.image_frame
 
+        def on_resize(event):
+            if hasattr(self, "last_image") and self.last_image:
+                self.update_image_frame(self.last_image)
+        
+        self.image_frame.bind("<Configure>" , on_resize)
+
     def capture_and_display(self):
         while not self.capture_event.is_set():
             try:
@@ -346,14 +368,51 @@ class Camera:
                 if result is None:
                     continue
                 image, _ = result
+                self.last_image = image
                 self.root.after(0 , lambda: self.update_image_frame(image))
             except Exception as e:
                 continue
 
     def update_image_frame(self , image:Image.Image):
-        image = ImageTk.PhotoImage(image)
+        image_frame_width = self.image_frame.winfo_width()
+        image_frame_height = self.image_frame.winfo_height()
+        image_width = image.width
+        image_height = image.height
+        
+        if image_frame_width == 1:
+            image_frame_width = self.image_frame.winfo_reqwidth()
+            image_frame_height = self.image_frame.winfo_reqheight()
+        if image_frame_width <= 1 or image_frame_height <= 1:
+            image_frame_width = image.width
+            image_frame_height = image.height
+
+        image_ratio = image.width / image.height
+        frame_ratio = image_frame_width / image_frame_height
+
+        if image_ratio > frame_ratio:
+            new_width = image_frame_width
+            new_height = int(image_frame_width / image_ratio)
+        else:
+            new_height = image_frame_height
+            new_width = int(image_frame_height * image_ratio)
+
+        resized_image = image.resize((new_width , new_height))
+
+        if hasattr(self.image_frame, 'background') and self.image_frame.background:
+            # Если нужен фон (опционально)
+            background = Image.new('RGB', (image_frame_width, image_frame_height), self.image_frame.background)
+        else:
+            background = Image.new('RGB', (image_frame_width, image_frame_height), 'white')
+            x_offset = (image_frame_width - new_width) // 2
+            y_offset = (image_frame_height - new_height) // 2
+
+            background.paste(resized_image, (x_offset, y_offset))
+
+        image = ImageTk.PhotoImage(image=image)
         self.image_frame.config(image = image)
         self.image_frame.image = image
+        
+
 
     def switch_recording(self):
         self.is_recording = not self.is_recording

@@ -17,8 +17,9 @@ class CameraApp:
     def destroy(self):
         self.gui.camera.close()
         self.root.destroy()
-
+        
 if __name__ == "__main__":
     camera_app = CameraApp()
+
     camera_app.run()
     

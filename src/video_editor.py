@@ -3,9 +3,9 @@ from tkinter import ttk
 from PIL import Image , ImageTk
 from tkinter import filedialog, messagebox
 import cv2
-from threading import Thread,Timer
+from threading import Thread
 import numpy as np
-import os
+
 
 
 class DualScale(tk.Canvas):
@@ -397,19 +397,28 @@ class VideoEditor(tk.Frame):
 
         frame_width = self.preview_image.winfo_width()
         frame_height = self.preview_image.winfo_height()
+        image_width = image.width
+        image_height = image.height
 
         if frame_width <= 1:
-            frame_width = 400 
-        if frame_height <= 1:
-            frame_height = 300 
+            frame_width = self.preview_image.winfo_reqwidth()
+            frame_height = self.preview_image.winfo_reqheight()
 
-        width_ratio = frame_width / image.width
-        height_ratio = frame_height / image.height
+        if frame_width<=1 or frame_height <=1 :
+            frame_width = image_width
+            frame_height = image_height
 
-        scale_ratio = min(width_ratio, height_ratio)
+        image_ratio = image_width / image_height
+        frame_ratio = frame_width / frame_height
 
-        new_width = int(image.width * scale_ratio)
-        new_height = int(image.height * scale_ratio)
+        if image_ratio > frame_ratio:
+            new_width = frame_width
+            new_height = int(frame_width / image_ratio)
+        else:
+            new_height = frame_height
+            new_width = int(frame_height * image_ratio)
+
+
 
         resized_image = image.resize((new_width, new_height), Image.LANCZOS)
         image_tk = ImageTk.PhotoImage(resized_image)
