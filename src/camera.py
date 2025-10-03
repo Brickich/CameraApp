@@ -8,7 +8,6 @@ from threading import Event , Thread
 import time
 from .video_editor import VideoEditor
 from typing import Any
-import cv2
 
 
 class Camera:
@@ -127,7 +126,7 @@ class Camera:
                     "width" : self.Width.get_range().get("max"),
                     "height" : 210,
                     "exposure_time" :1000.0,
-                    "fps": 30.0,
+                    "fps": 24.0,
                     "gain" : self.Gain.get_range().get("max"),
                     "trigger_delay" : self.TriggerDelay.get_range().get("min"),
                     "trigger_time" : self.trigger_time,
@@ -135,6 +134,10 @@ class Camera:
                     "offsetX" : 0 , 
                     "offsetY" : 0,
                 }
+                self.preview_preset = self.default_preset.copy()
+                self.preview_preset["exposure_time"] = 40000
+
+
                 self.trigger_preset = self.default_preset.copy()
                 self.trigger_preset['exposure_time'] = self.ExposureTime.get_range().get("min")
                 self.trigger_preset["fps"] = 1000.0
@@ -236,14 +239,18 @@ class Camera:
         self.quantity_of_frames = preset["quantity_of_frames"]
         self.OffsetY.set(preset['offsetY'])
         
-    def apply_settings_clicked(self):
+    def apply_settings_clicked(self , preset = None):
+        
         was_recording = self.is_recording
         if was_recording:
             self.switch_capture()
         self.apply_preset(self.trigger_preset)
         self.image_view.current_fps_label.config(text = f"Current FPS : {self.CurrentFrameRate.get()}")
         print(self.trigger_preset)
-        self.apply_preset(self.default_preset)
+        if preset is not None:
+            self.apply_preset(self.default_preset)
+        else:
+            self.apply_preset(preset)
         if was_recording:
             self.switch_capture()
 

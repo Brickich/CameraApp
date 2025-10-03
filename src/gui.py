@@ -180,6 +180,7 @@ class ControlPanelContainer():
         self.trigger_button = tk.Button(self.control_panel_frame, command=self.switch_trigger, text= "SOFT", font=("Arial" , 14))
         self.trigger_button.place(relx=0.5 , rely=0.5 , anchor="center")
 
+        self.preview_button = tk.Button(self.control_panel_frame , command = self.switch_to_preview)
         self.settings_button = tk.Button(
             self.control_panel_frame,
             image=self.settings_image,
@@ -321,6 +322,11 @@ class ControlPanelContainer():
             self.SOFTWARE_trigger_enabled = s
             self.LINE0_trigger_enabled = l0
             self.LINE2_trigger_enabled = l1
+
+    def switch_to_preview(self):
+        preset = self.get_preset_from_sliders()
+        self.camera.preview_preset['exposure_time'] = preset["exposure_time"]
+        self.camera.apply_settings_clicked(self.camera.preview_preset)
 
     def init_sliders(self, frame):
         self.sliders_frame = tk.LabelFrame(
