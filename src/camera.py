@@ -41,8 +41,6 @@ class Camera:
         self.flip_h_enabled = False
         self.flip_v_enabled = False
         self.image_angle =0 
-        self.offsetX = 0
-        self.offsetY = 0
 
         self.images:list[Image.Image] =[]
         self.timestamps:list[float] = []
@@ -84,6 +82,8 @@ class Camera:
                 self.ExposureTime = self.FeatureControl.get_float_feature("ExposureTime")
                 self.Gain = self.FeatureControl.get_float_feature("Gain")
                 self.FrameRate = self.FeatureControl.get_float_feature("AcquisitionFrameRate")
+                self.OffsetX = self.FeatureControl.get_int_feature("OffsetX")
+                self.OffsetY = self.FeatureControl.get_int_feature("OffsetY")
 
                 self.TriggerMode = self.FeatureControl.get_enum_feature("TriggerMode")
                 self.TriggerSource = self.FeatureControl.get_enum_feature("TriggerSource")
@@ -120,6 +120,9 @@ class Camera:
                         self.SupportColorFormat = True
                         self.SupportMonoFormat = True
 
+                self.OffsetX.set(0)
+                self.OffsetY.set(0)
+                
                 self.default_preset = {
                     "width" : self.Width.get_range().get("max"),
                     "height" : 210,
@@ -129,8 +132,8 @@ class Camera:
                     "trigger_delay" : self.TriggerDelay.get_range().get("min"),
                     "trigger_time" : self.trigger_time,
                     "quantity_of_frames" : self.quantity_of_frames,
-                    "offsetX" : self.offsetX , 
-                    "offsetY" : self.offsetY,
+                    "offsetX" : 0 , 
+                    "offsetY" : 0,
                 }
                 self.trigger_preset = self.default_preset.copy()
                 self.trigger_preset['exposure_time'] = self.ExposureTime.get_range().get("min")
@@ -196,8 +199,28 @@ class Camera:
         self.trigger_preset = preset
 
     def apply_preset(self, preset):
+
+        self.OffsetX.set(0)
+        self.OffsetY.set(0)
+
         self.Width.set(preset['width'])
         self.Height.set(preset['height'])
+
+
+        max_width = self.Width.get_range().get("max")
+
+
+        if max_width != preset['width']:
+            offsetX = int(max_width/2 - preset['width']/2)
+            offsetX_inc = self.OffsetX.get_range().get("inc")
+
+            offsetX_diff = offsetX % offsetX_inc
+            if offsetX_diff != 0:
+                offsetX -= offsetX_diff
+            if offsetX < offsetX_inc:
+                offsetX = self.OffsetX.get_range().get("min")
+            preset['offsetX'] = offsetX
+            self.cam.OffsetX.set(offsetX)
 
         if self.type == "MER2":
             if preset['exposure_time'] < 20:
@@ -211,8 +234,7 @@ class Camera:
         self.TriggerDelay.set(preset['trigger_delay'])
         self.trigger_time = preset['trigger_time']
         self.quantity_of_frames = preset["quantity_of_frames"]
-        self.cam.OffsetX.set(preset['offsetX'])
-        self.cam.OffsetY.set(preset['offsetY'])
+        self.OffsetY.set(preset['offsetY'])
         
     def apply_settings_clicked(self):
         was_recording = self.is_recording
