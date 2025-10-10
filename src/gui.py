@@ -1,168 +1,480 @@
 import tkinter as tk
-from tkinter import ttk
+from.video_editor import VideoEditor
 from tkinter import messagebox
-from PIL import Image, ImageTk
-from .video_editor import VideoEditor
-from .camera import Camera
-from gxipy import GxTriggerSourceEntry
+from src.camera import Camera
 
 
-class ImageViewContainer:
-
-    def __init__(
-        self,
-        root: tk.Tk,
-        video_editor:VideoEditor,
-        styles: dict,
-        camera:Camera,
-        position_and_size={
-            "relx": 0.0,
-            "rely": 0.1,
-            "x": 0,
-            "y": 0,
-            "relwidth": 1.0,
-            "relheight": 0.9,
-        },
-    ):
+class AdjusterFrame(tk.Frame):
+    def __init__(self , root , camera:Camera):
+        super().__init__(root , bd=2, relief="ridge",
+                         background="#e3f0fc",highlightbackground="#8fa8c2",highlightthickness=1,)
         self.root = root
-        self.video_editor = video_editor
         self.camera = camera
+        self.sliders:dict[str , tk.Scale] = {}
+        self.entries = {}
 
-        self.styles = styles
-        self.position_and_size = position_and_size
-        self.init_image_canvas()
+        self.__init_original_ranges()
+        self.__init_sliders()
+        
 
-    def init_image_canvas(self):
-        self.image_frame = tk.Label(self.root , self.styles)
-        self.image_frame.place(self.position_and_size)
+    def __init_original_ranges(self):
+        self.original_ranges = {
+            "Width" : self.camera.Width.get_range(),
+            "Height" : self.camera.Height.get_range(),
+            "OffsetX" : self.camera.OffsetX.get_range(),
+            "OffsetY" : self.camera.OffsetY.get_range(),
+        }
+
+    def __init_sliders(self):
+        slider_configs = self.__get_slider_configuration()
+
+        for row , (param_name , config) in enumerate(slider_configs.items() , 1):
+            self.__create_slider_with_entry(param_name , config , row)
 
 
+    def __get_slider_configuration(self):
+        config = {}
 
-        self.video_editor_image = ImageTk.PhotoImage(Image.open("assets/video_editor.png").resize((25,25)))
-        self.video_editor_button = tk.Button(self.root , image=self.video_editor_image)
+        config['Width'] = {
+            "range" : self.camera.Width.get_range(),
+            "initial" : self.camera.Width.get(),
+            "data_type" : int ,
+            "label" : "Width",
+        }
 
-        self.video_editor_button.place(
-            relx=1.0,
-            rely=1.0,
-            x=-self.video_editor_button.winfo_reqwidth() - 5,
-            y=-self.video_editor_button.winfo_reqheight() - 5,
+        config["Height"] = {
+            "range": self.camera.Height.get_range(),
+            "initial": self.camera.Height.get(),
+            "data_type": int,
+            "label": "Height"
+        }
+        
+        exposure_range = self.camera.ExposureTime.get_range()
+        if self.camera.type != "MER":
+            exposure_range['min'] = 1.0
+        exposure_range["inc"] = 1.0
+        
+        config["ExposureTime"] = {
+            "range": exposure_range,
+            "initial": self.camera.ExposureTime.get(),
+            "data_type": float,
+            "label": "Exposure Time, μs"
+        }
+        
+        fps_range = self.camera.FrameRate.get_range()
+        fps_range['min'] = 1.0
+        fps_range['inc'] = 1.0
+        
+        config["FrameRate"] = {
+            "range": fps_range,
+            "initial": self.camera.FrameRate.get(),
+            "data_type": float,
+            "label": "FrameRate"
+        }
+        
+        gain_range = self.camera.Gain.get_range()
+        gain_range['inc'] = 0.1
+        
+        config["Gain"] = {
+            "range": gain_range,
+            "initial": self.camera.Gain.get(),
+            "data_type": float,
+            "label": "Gain, dB"
+        }
+        
+        trigger_delay_range = self.camera.TriggerDelay.get_range()
+        trigger_delay_range['inc'] = 0.01
+        
+        config["TriggerDelay"] = {
+            "range": trigger_delay_range,
+            "initial": self.camera.TriggerDelay.get(),
+            "data_type": float,
+            "label": "Trigger Delay, μs"
+        }
+        
+        config["NumberOfFrames"] = {
+            "range": {"min": 10, "max": 1000, "inc": 1},
+            "initial": getattr(self.camera, 'quantity_of_frames', 100),
+            "data_type": int,
+            "label": "NumberOfFrames"
+        }
+        
+        config["OffsetX"] = {
+            "range": self.camera.OffsetX.get_range(),
+            "initial": self.camera.OffsetX.get(),
+            "data_type": int,
+            "label": "OffsetX"
+        }
+        
+        config["OffsetY"] = {
+            "range": self.camera.OffsetY.get_range(),
+            "initial": self.camera.OffsetY.get(),
+            "data_type": int,
+            "label": "OffsetY"
+        }
+        return config
+
+
+    def __create_slider_with_entry(self , param_name, config , row):
+        def __validate_input(value:str , data_type:str) -> bool :
+            if value == "":
+                return True
+
+            try:
+                if data_type == "int" :
+                    int(value)
+                else:
+                    float(value)
+                return True
+            except ValueError:
+                return False
+
+
+        label_text = config["label"]
+        range = config["range"]
+        initial_value = config["initial"]
+        data_type = config['data_type']
+
+        slider_label = tk.Label(self ,  text=label_text , font=("Segoe UI" , 9) , bg="#e3f0fc", fg="#3B4252")
+        min_val = range["min"]
+        max_val = range["max"]
+        inc = range["inc"]
+
+        slider = tk.Scale(
+            self,
+            from_=min_val,
+            to=max_val,
+            orient=tk.HORIZONTAL,
+            resolution=inc,
+            bg="#e3f0fc",
+            troughcolor="#c7d9f0",
+            activebackground="#aec5e0",
+            sliderrelief="flat",
+            width=12,
+            length=100,
+            font=("Segoe UI", 8),
         )
+        slider.set(initial_value)
 
-        self.current_fps_label = tk.Label(self.root , text=f"Current FPS : {self.camera.CurrentFrameRate.get()}" , font=("Arial" , 10))
-        self.current_fps_label.place(relx=0.5 , rely=1.0 , y=-self.current_fps_label.winfo_reqheight() , anchor="center")
+        validation = self.register(__validate_input)
+
+        entry = tk.Entry(
+            self,
+            width=10,
+            font=("Segoe UI", 10),
+            bg="white",
+            highlightcolor="#8fa8c2",
+            fg="#2E3440",
+            relief="flat",
+            highlightthickness=1,
+            borderwidth=0,
+            validate="key",
+            validatecommand=(validation, '%P', data_type.__name__)
+        )
+        entry.insert(0 , str(initial_value))
+
+        slider_label.grid(row=row , column=0, padx=5, sticky="w")
+        slider.grid(row=row, column=1, padx=5)
+        entry.grid(row=row, column=2, padx=5)
+
+        self.sliders[param_name] = slider
+        self.entries[param_name] = entry
+
+        slider.config(command=lambda val, p = param_name : self.__on_slider_changed(p))
+        entry.bind("<Return>", lambda e, p=param_name: self.__on_entry_changed(p))   
+        entry.bind("<FocusOut>", lambda e, p=param_name: self.__on_entry_changed(p))
 
 
 
 
+    def _update_slider_range(self, param_name: str, new_max: float):
+        slider = self.sliders[param_name]
+        entry = self.entries[param_name]
+        
+        current_value = slider.get()
+        min_val = self.original_ranges[param_name]["min"]
+        
+        slider.config(from_=min_val, to=new_max)
+        
+        if current_value > new_max:
+            new_value = new_max
+            slider.set(new_value)
+            entry.delete(0, tk.END)
+            entry.insert(0, str(new_value))
+        elif current_value < min_val:
+            new_value = min_val
+            slider.set(new_value)
+            entry.delete(0, tk.END)
+            entry.insert(0, str(new_value))
 
-class ControlPanelContainer():
+    def __on_slider_changed(self , param_name:str):
+        slider = self.sliders[param_name]
+        entry = self.entries[param_name]
 
-    def __init__(
-        self,
-        root: tk.Tk,
-        camera: Camera,
-        styles: dict,
-        image_view: ImageViewContainer,
-        position_and_size={
-            "relx": 0.0,
-            "rely": 0.0,
-            "x": 0,
-            "y": 0,
-            "relwidth": 1.0,
-            "relheight": 0.1,
-        },
-    ):
+        value = slider.get()
+        entry.delete(0, "end")
+        entry.insert(0, str(value))
+        
+        self.__adjust_offsets(param_name)
+
+
+    def __on_entry_changed(self, param_name:str):
+        entry = self.entries[param_name]
+        slider = self.sliders[param_name]
+
+
+        try:
+            current_value = slider.get()
+            if isinstance(current_value, int):
+                data_type = int
+            else:
+                data_type = float
+
+            value = data_type(entry.get())
+            min_val = slider.cget("from")
+            max_val = slider.cget("to")
+            
+            if min_val <= value <= max_val:
+                
+                inc = slider.cget("resolution")
+                adjusted_value = self.__adjust_to_step(value, min_val, max_val, inc)
+                slider.set(adjusted_value)
+                entry.delete(0, tk.END)
+                entry.insert(0, str(adjusted_value))
+                
+
+                
+            else:
+                messagebox.showerror("Ошибка", 
+                                   f"Значение должно быть между {min_val} и {max_val}")
+                entry.delete(0, tk.END)
+                entry.insert(0, str(slider.get()))
+            
+
+                
+        except ValueError:
+            messagebox.showerror("Ошибка", "Введите корректное числовое значение")
+            entry.delete(0, tk.END)
+            entry.insert(0, str(slider.get()))
+        finally:
+            self.__adjust_offsets(param_name)
+
+    def __adjust_offsets(self, param_name):
+        if param_name in ["Width", "Height", "OffsetX", "OffsetY"]:
+            max_width = self.original_ranges["Width"]["max"]
+            max_height = self.original_ranges["Height"]["max"]
+
+            match param_name:
+                case "Width":
+                    current_width = self.sliders["Width"].get()
+                    new_offsetx_max = max_width - current_width
+                    self._update_slider_with_correction("OffsetX", new_offsetx_max)
+
+                case "Height":
+                    current_height = self.sliders["Height"].get()
+                    new_offsety_max = max_height - current_height
+                    self._update_slider_with_correction("OffsetY", new_offsety_max)
+
+                case "OffsetX":
+                    current_offset_x = self.sliders["OffsetX"].get()
+                    new_width_max = max_width - current_offset_x
+                    self._update_slider_with_correction("Width", new_width_max)
+
+                case "OffsetY":
+                    current_offset_y = self.sliders["OffsetY"].get()
+                    new_height_max = max_height - current_offset_y
+                    self._update_slider_with_correction("Height", new_height_max)
+
+    def _update_slider_with_correction(self, param_name: str, new_max: float):
+        slider = self.sliders[param_name]
+        entry = self.entries[param_name]
+
+        current_value = slider.get()
+        min_val = self.original_ranges[param_name]["min"]
+
+        slider.config(to=new_max)
+
+        if current_value > new_max:
+            new_value = new_max
+            slider.set(new_value)
+            entry.delete(0, tk.END)
+            entry.insert(0, str(new_value))
+        elif current_value < min_val:
+            new_value = min_val
+            slider.set(new_value)
+            entry.delete(0, tk.END)
+            entry.insert(0, str(new_value))
+
+
+
+    def __adjust_to_step(self, value: float, min_val: float, max_val: float, step: float):
+        if value< min_val:
+            return min_val
+        if value > max_val:
+            return max_val
+        
+        steps = round((value - min_val) / step)
+        adjusted_value = min_val + steps * step
+
+        return min( max(adjusted_value , min_val) , max_val)
+
+    def get_preset(self):
+        preset = {}
+        for param_name , entry in self.entries.items():
+            try:
+                value_str = entry.get()
+                slider_value = self.__get_value(param_name)
+                if isinstance(slider_value , int):
+                    preset[param_name] = int(value_str)
+                else:
+                    preset[param_name] = float(value_str)
+            except (ValueError , tk.TclError) :
+                preset[param_name] = self.__get_value(param_name)
+        
+        return preset
+
+    def __get_value(self, param_name):
+        if param_name in self.sliders:
+            return self.sliders[param_name].get()
+        else:
+            if hasattr(self.camera, param_name):
+                return getattr(self.camera, param_name).get()
+            return 0
+
+    def set_values(self, preset:dict):
+        for param_name , value in preset.items():
+            if param_name in self.sliders and param_name in self.entries:
+                self.sliders[param_name].set(value)
+                self.entries[param_name].delete(0, tk.END)
+                self.entries[param_name].insert(0, str(value))
+
+
+
+
+class SettingsFrame(tk.Frame):
+    def __init__(self , root , camera:Camera, button_size = 10):
+        super().__init__(root ,             
+                         bd=2,
+                        relief=tk.SOLID,
+                        bg="#88bdf2",)
         self.root = root
         self.camera = camera
-        self.image_view = image_view
-        self.styles = styles
-        self.position_and_size = position_and_size
+        self.button_size = button_size
+        self.save_image = tk.PhotoImage(file = "assets/save.png").subsample(10)
 
-        self.button_size = self.styles.get("button_size" , (25,25))
+
+        self.colored_enabled = self.camera.colored
+        self.mono_enabled = not self.colored_enabled
+
+
+        self.colored_button = tk.Button(self, text="Colored",state=f"{"normal" if self.camera.SupportColorFormat else "disabled"}",
+                                         width=10, font=("Verdana" , 12) , command= lambda :switch_color("color"))
+        self.colored_button.grid(row=1, column=0, columnspan=2)
+
+        self.mono_button = tk.Button(self, text="Mono",state=f"{"normal" if self.camera.SupportMonoFormat else "disabled"}",
+                                      width=10, font=("Verdana" , 12) , command= lambda: switch_color("mono"))
+        self.mono_button.grid(row=1, column=1, columnspan=2)
+
+
+
+
+        self.sliders_frame = AdjusterFrame(self , self.camera)
+        self.sliders_frame.grid(row=2, sticky="ew", column=0, columnspan=3)
+
+        self.apply_settings_button = tk.Button(self,image=self.save_image)
+        self.apply_settings_button.grid(row=3, column=0 , columnspan=3)
+
+        def switch_color(mode = "color"):
+            mode = mode.lower()
+            if mode == "color":
+                if self.camera.SupportColorFormat:
+
+                    self.colored_enabled = True
+                    self.mono_enabled = not self.colored_enabled
+                    self.camera.colored = True
+
+                    self.colored_button.config(state="active" , background="green" , foreground="white" , activebackground="green" , activeforeground="white")
+                    self.mono_button.config(background="SystemButtonFace" ,activebackground="SystemButtonFace" , foreground="black" ,  activeforeground="black")
+                    if self.camera.SupportMonoFormat:
+                        self.mono_button.config(state="normal")
+                    else:
+                        self.mono_button.config(state="disabled")
+
+            elif mode == "mono":
+                if self.camera.SupportMonoFormat:
+
+                    self.mono_enabled = True
+                    self.colored_enabled = not self.mono_enabled
+                    self.camera.colored = False
+
+                    self.mono_button.config(state="active" , background="green" , foreground="white" , activebackground="green" , activeforeground="white")
+                    self.colored_button.config(background="SystemButtonFace" ,activebackground="SystemButtonFace" , foreground="black" ,  activeforeground="black")
+                    if self.camera.SupportColorFormat:
+                        self.colored_button.config(state="normal")
+                    else:
+                        self.colored_button.config(state="disabled")
+    
+
+
+class CameraControlPane():
+
+    def __init__(self, root: tk.Tk, camera:Camera, canvas:tk.Canvas):
+        self.root = root
+        self.camera = camera
+        self.canvas = canvas
+
+        self.settings_frame = SettingsFrame(self.canvas , self.camera)
+        self.settings_frame.lift()
+
+        self.button_size = 10
+
+        self.enabled = False
+
         self.camera_settings_window_enabled = False
-        self.play_pause_index =0
 
-        self.SOFTWARE_trigger_enabled = True
-        self.LINE0_trigger_enabled = False
-        self.LINE2_trigger_enabled = False
+        self.settings_image = tk.PhotoImage(file = "assets/settings.png").subsample(self.button_size)
+        self.settings_button = tk.Button(self.canvas , image= self.settings_image , command= self.switch)
+        self.settings_button.place(relx=1.0, rely= 0.0 , x=-self.settings_button.winfo_reqwidth())
+        self.settings_button.lift()
 
-        self.settings_buttons:list[tk.Button] = []
+        self.control_panel_frame = self.__init_control_panel()
 
-        self.init_control_panel()
-        self.init_camera_settings_window()
-
-    def init_control_panel(self):
+    def __init_control_panel(self):
         image_paths = {
-            "play_pause": ["assets/play_button.png", "assets/pause_button.png"],
             "white_balance": "assets/white_balance.png",
             "crosshair": "assets/crosshair.png",
             "flip_h": "assets/flip_h.png",
             "flip_v": "assets/flip_v.png",
             "rotate_right": "assets/rotate_to_right.png",
             "rotate_left": "assets/rotate_to_left.png",
-            "settings": "assets/settings.png",
         }
-        self.play_pause_images = [
-            ImageTk.PhotoImage(Image.open(img).resize(self.button_size))
-            for img in image_paths["play_pause"]
-        ]
 
-        self.wbalance_image = ImageTk.PhotoImage(
-            Image.open(image_paths["white_balance"]).resize(self.button_size)
-        )
-        self.crosshair_image = ImageTk.PhotoImage(
-            Image.open(image_paths["crosshair"]).resize(self.button_size)
-        )
-        self.flip_h_image = ImageTk.PhotoImage(
-            Image.open(image_paths["flip_h"]).resize(self.button_size)
-        )
-        self.flip_v_image = ImageTk.PhotoImage(
-            Image.open(image_paths["flip_v"]).resize(self.button_size)
-        )
-        self.rotate_right_image = ImageTk.PhotoImage(
-            Image.open(image_paths["rotate_right"]).resize(self.button_size)
-        )
-        self.rotate_left_image = ImageTk.PhotoImage(
-            Image.open(image_paths["rotate_left"]).resize(self.button_size)
-        )
-        self.settings_image = ImageTk.PhotoImage(
-            Image.open(image_paths["settings"]).resize(self.button_size)
-        )
 
-        self.control_panel_frame = tk.Frame(self.root)
-        self.control_panel_frame.place(self.position_and_size)
+        self.wbalance_image = tk.PhotoImage(file = image_paths["white_balance"]).subsample(self.button_size)
+        self.crosshair_image = tk.PhotoImage(file = image_paths["crosshair"]).subsample(self.button_size)
+        self.flip_h_image = tk.PhotoImage(file = image_paths["flip_h"]).subsample(self.button_size)
+        self.flip_v_image = tk.PhotoImage(file = image_paths["flip_v"]).subsample(self.button_size)
+        self.rotate_right_image = tk.PhotoImage(file = image_paths["rotate_right"]).subsample(self.button_size)
+        self.rotate_left_image = tk.PhotoImage(file = image_paths["rotate_left"]).subsample(self.button_size)
+
+
+        control_panel_frame = tk.Frame(self.canvas , bd=0 )
         self.control_panel_placing = {"sticky": "ew", "pady": 10, "padx": 5}
 
-        self.play_pause_button = tk.Button(
-            self.control_panel_frame,
-            image=self.play_pause_images[self.play_pause_index],)
-        self.wbalance_button = tk.Button(
-            self.control_panel_frame,
-            image=self.wbalance_image,
-            command=self.camera.switch_white_balance,
-        )
-        self.crosshair_button = tk.Button(
-            self.control_panel_frame,
-            image=self.crosshair_image,
-            command=self.camera.switch_crosshair,
-        )
-        self.flip_h_button = tk.Button(
-            self.control_panel_frame, image=self.flip_h_image, command=self.camera.flip_image_horizontally
-        )
-        self.flip_v_button = tk.Button(
-            self.control_panel_frame, image=self.flip_v_image, command=self.camera.flip_image_vertically
-        )
-        self.rotate_right_button = tk.Button(
-            self.control_panel_frame,
-            image=self.rotate_right_image,
-            command=self.camera.rotate_image_right,
-        )
-        self.rotate_left_button = tk.Button(
-            self.control_panel_frame, image=self.rotate_left_image, command=self.camera.rotate_image_left
-        )
+        self.wbalance_button = tk.Button(control_panel_frame,image=self.wbalance_image, command=lambda : self.camera.switch_white_balance())
+
+        self.crosshair_button = tk.Button(control_panel_frame,image=self.crosshair_image, command=  lambda : self.camera.switch_crosshair())
+
+        self.flip_h_button = tk.Button(control_panel_frame, image=self.flip_h_image , command=lambda : self.camera.flip_image_horizontally())
+
+        self.flip_v_button = tk.Button(control_panel_frame, image=self.flip_v_image , command=lambda : self.camera.flip_image_vertically())
+
+        self.rotate_right_button = tk.Button(control_panel_frame,image=self.rotate_right_image, command=lambda : self.camera.rotate_image_right())
+
+        self.rotate_left_button = tk.Button(control_panel_frame, image=self.rotate_left_image , command=lambda : self.camera.rotate_image_left())
+
         for i, widget in enumerate(
             [
-                self.play_pause_button,
                 self.wbalance_button,
                 self.crosshair_button,
                 self.flip_h_button,
@@ -173,499 +485,264 @@ class ControlPanelContainer():
         ):
             widget.grid(row=0, column=i, **self.control_panel_placing)
 
-        self.trigger_button = tk.Button(self.control_panel_frame, command=self.switch_trigger, text= "SOFT", font=("Arial" , 14))
-        self.trigger_button.place(relx=0.5 , rely=0.5 , anchor="center")
+        return control_panel_frame
 
-        self.preview_button = tk.Button(self.control_panel_frame , command = self.switch_to_preview , font=("Arial" , 12), text="Preview")
-        self.preview_button.place(relx=0.7 , rely=0.5 , anchor="center")
-        self.settings_button = tk.Button(
-            self.control_panel_frame,
-            image=self.settings_image,
-            font=("Arial", 12),
-            command=self.switch_camera_settings_window,
-        )
-
-        self.settings_button.place(
-            relx=1.0,
-            rely=0.5,
-            x=-self.settings_button.winfo_reqwidth() - 15,
-            anchor="center",
-        )
-
-    def init_camera_settings_window(self):
-        self.camera_settings_frame = tk.LabelFrame(
-            self.root,
-            bd=2,
-            relief=tk.SOLID,
-            bg="#88bdf2",
-            padx=2.5,
-            pady=2.5,
-            font=("Arial", 10),
-        )
-        self.button_size = (30, 30)
-        self.save_image = ImageTk.PhotoImage(
-            Image.open("assets/save.png").resize(self.button_size)
-        )
-
-        self.SOFTWARE_trigger_button = tk.Button(
-            self.camera_settings_frame,
-            text="SOFTWARE",
-            state="active",
-            bg="green",
-            activebackground="green",
-            fg="white",
-            activeforeground="white",
-            command=lambda: self.switch_trigger_button(
-                self.SOFTWARE_trigger_button, "SOFT"
-            ),
-            font=("Verdana", 12)
-        )
-        self.LINE0_trigger_button = tk.Button(
-            self.camera_settings_frame,
-            text="LINE0",
-            state="normal",
-            command=lambda: self.switch_trigger_button(
-                self.LINE0_trigger_button, "LINE0"
-            ),
-            font=("Verdana", 12)
-        )
-        self.LINE2_trigger_button = tk.Button(
-            self.camera_settings_frame,
-            text="LINE2",
-            state="normal",
-            command=lambda: self.switch_trigger_button(
-                self.LINE2_trigger_button, "LINE2"
-            ),
-            font=("Verdana", 12)
-        )
-
-        self.SOFTWARE_trigger_button.grid(row=0, column=0, sticky="ew")
-        self.LINE0_trigger_button.grid(row=0, column=1,sticky="ew")
-        self.LINE2_trigger_button.grid(row=0, column=2,sticky="ew")
-
-        self.trigger_buttons = [
-            self.SOFTWARE_trigger_button,
-            self.LINE0_trigger_button,
-            self.LINE2_trigger_button
-        ]
-
-        self.colored_button = tk.Button(
-            self.camera_settings_frame,
-            text="Colored",
-            state="normal",
-            command=lambda: self.switch_color("COLOR"),
-            width=10,
-            font=("Verdana" , 12)
-        )
-        self.mono_button = tk.Button(
-            self.camera_settings_frame,
-            text="Mono",
-            state="normal",
-            command=lambda: self.switch_color("MONO"),
-            width=10,
-            font=("Verdana" , 12)
-        )
-        if self.camera.isColored:
-            self.colored_button.config(bg="green", activebackground="green", state="active", fg="white" , activeforeground="white")
-
-            if not self.camera.SupportMonoFormat:
-                self.mono_button.config(state="disabled")
-
+    def switch(self):
+        self.enabled = not self.enabled
+        if self.enabled:
+            self.control_panel_frame.lift()
+            self.settings_frame.lift()
+            self.control_panel_frame.place(relx=0.0 , rely=0.0)
+            self.settings_frame.place(relx=1.0 , rely= 0.0 , x=-self.settings_frame.winfo_reqwidth() , y=self.settings_button.winfo_height() + 5)
         else:
-            self.mono_button.config(bg="green", activebackground="green", state="active", fg="white" , activeforeground="white")
+            self.control_panel_frame.lower()
+            self.settings_frame.lower()
+            self.control_panel_frame.place_forget()
+            self.settings_frame.place_forget()
 
-        self.colored_button.grid(row=1, column=0, columnspan=2)
-        self.mono_button.grid(row=1, column=1, columnspan=2)
-        self.init_sliders(self.camera_settings_frame)
-        self.sliders_frame.grid(row=2, sticky="ew", column=0, columnspan=3)
-
-        self.basename_entry = tk.Entry(self.camera_settings_frame , width=30)
-        self.basename_entry.grid(row=3 , columnspan=2)
-        self.apply_settings_button = tk.Button(
-            self.camera_settings_frame,
-            image=self.save_image,
-            command=self.apply_settings_button_clicked,
-        ).grid(row=3, column=2)
-        self.camera_settings_frame.update_idletasks()
-        self.camera_settings_frame.place_forget()
-
-    def switch_trigger(self):
-        basename = self.basename_entry.get()
-        if self.SOFTWARE_trigger_enabled:
-            self.camera.switch_trigger(self.trigger_button , GxTriggerSourceEntry.SOFTWARE , basename)
-        elif self.LINE0_trigger_enabled:
-            self.camera.switch_trigger(self.trigger_button , GxTriggerSourceEntry.LINE0 , basename)
-        elif self.LINE2_trigger_enabled:
-            self.camera.switch_trigger(self.trigger_button, GxTriggerSourceEntry.LINE2 , basename)
-
-    def switch_trigger_button(self, button:tk.Button, command:str):
-        for btn in self.trigger_buttons:
-            btn.config(bg="SystemButtonFace", activebackground="SystemButtonFace", state="normal", fg="black", activeforeground="black") 
-
-        button.config(bg="green",activebackground="green", state="active", fg="white", activeforeground="white")
-        self.trigger_button.config(text=command.upper())
-        command_states = {
-            "soft": (True, False, False, False),
-            "line0": (False, True, False, False),
-            "line2": (False, False, True, False),
-            "external": (False, False, False, True) 
-        }
-        command=command.lower()
-        if command in command_states:
-            s , l0 , l1 , ext = command_states[command]
-            self.SOFTWARE_trigger_enabled = s
-            self.LINE0_trigger_enabled = l0
-            self.LINE2_trigger_enabled = l1
-
-    def switch_to_preview(self):
-        self.camera.preview_preset = self.camera.default_preset
-        self.camera.preview_preset['exposure_time'] = float(40000)
-
-        self.camera.apply_settings_clicked(preview_preset=True)
-
-    def init_sliders(self, frame):
-        self.sliders_frame = tk.LabelFrame(
-            frame,
-            bd=2,
-            relief="ridge",
-            font=("Segoe UI", 11, "bold"),
-            foreground="#2E3440",
-            background="#e3f0fc",
-            highlightbackground="#8fa8c2",
-            highlightthickness=1,
-        )
-        width_range = self.camera.Width.get_range()
-        height_range = self.camera.Height.get_range()
-        exposure_time_range = self.camera.ExposureTime.get_range()
-        if self.camera.type == "MER2":
-            exposure_time_range['min'] = 1.0
-        exposure_time_range["inc"]=1.0
-        fps_range = self.camera.FrameRate.get_range()
-        fps_range['min'] = 1.0
-        fps_range['inc'] = 1.0
-        gain_range = self.camera.Gain.get_range()
-        gain_range['inc'] = 0.1
-        offsetX_range = self.camera.cam.OffsetX.get_range()
-        offsetY_range = self.camera.cam.OffsetY.get_range()
-
-        self.width_slider, self.width_entry= add_slider_with_entry(
-            self.sliders_frame,
-            label_text="Width",
-            slider_range=width_range,
-            row=1,
-            initial_value=self.camera.Width.get(),
-        )
-        self.height_slider, self.height_entry= add_slider_with_entry(
-            self.sliders_frame,
-            "Height",
-            slider_range=height_range,
-            row=2,
-            initial_value=self.camera.Height.get(),
-        )
-        self.exposure_time_slider, self.exposure_time_entry = add_slider_with_entry(
-            self.sliders_frame,
-            "Exposure Time, μs",
-            slider_range=exposure_time_range,
-            row=3,
-            initial_value=self.camera.ExposureTime.get(),
-        )
-        self.fps_slider, self.fps_entry = add_slider_with_entry(
-            self.sliders_frame,
-            "FrameRate",
-            slider_range=fps_range,
-            row=4,
-            initial_value=self.camera.FrameRate.get(),
-        )
-        self.gain_slider, self.gain_entry= add_slider_with_entry(
-            self.sliders_frame,
-            "Gain, dB",
-            slider_range=gain_range,
-            row=5,
-            initial_value=self.camera.Gain.get(),
-        )
-
-        trigger_delay_range = self.camera.TriggerDelay.get_range()
-        trigger_delay_range['inc'] = 0.01
-        self.trigger_delay_slider,self.trigger_delay_entry = add_slider_with_entry(
-            self.sliders_frame,
-            "Trigger Delay, μs",
-            slider_range=trigger_delay_range,
-            row=6,
-            initial_value=self.camera.TriggerDelay.get()
-        )
-
-        quantity_of_frames_range = {"min" :10 , "max" : 1000, "inc" : 1}
-        self.quantity_of_frames_slider, self.quantity_of_frames_entry = (
-            add_slider_with_entry(
-                self.sliders_frame,
-                "NumberOfFrames",
-                slider_range=quantity_of_frames_range,
-                row=8,
-                initial_value=self.camera.quantity_of_frames,
-            )
-        )
-        self.offsetX_slider , self.offsetX_entry= add_slider_with_entry(
-            self.sliders_frame,
-            "OffsetX",
-            slider_range= offsetX_range,
-            row= 9 , 
-            initial_value= self.camera.cam.OffsetX.get(),
-        )
-        self.offsetY_slider , self.offsetY_entry = add_slider_with_entry(
-            self.sliders_frame , 
-            "OffsetY",
-            slider_range= offsetY_range ,
-            row = 10 ,
-            initial_value=self.camera.cam.OffsetY.get()
-        )
-
-    def switch_camera_settings_window(self):
-        self.camera_settings_window_enabled = not self.camera_settings_window_enabled
-        if self.camera_settings_window_enabled:
-            frame_width = self.camera_settings_frame.winfo_reqwidth()
-            frame_height = self.camera_settings_frame.winfo_reqheight()
-            self.camera_settings_frame.place(
-                x=-frame_width - 5,
-                relx=1.0,
-                y=self.settings_button.winfo_y()
-                + self.settings_button.winfo_reqheight()
-                + 15,
-            )
-            self.camera_settings_frame.place(
-                x=-frame_width - 5,
-                relx=1.0,
-                y=self.settings_button.winfo_y()
-                + self.settings_button.winfo_reqheight()
-                + 15,
-            )
-        else:
-            self.camera_settings_frame.place_forget()
-
-    def get_preset_from_sliders(self) -> dict[str, float | int]:
-        preset = {
-            "width": int(self.width_entry.get()),
-            "height": int(self.height_entry.get()),
-            "exposure_time": float(self.exposure_time_entry.get()),
-            "fps": float(self.fps_entry.get()),
-            "gain": float(self.gain_entry.get()),
-            "trigger_delay" : float(self.trigger_delay_entry.get()),
-            "quantity_of_frames" : int(self.quantity_of_frames_entry.get()),
-            "offsetX" : int(self.offsetX_entry.get()),
-            "offsetY" : int(self.offsetY_entry.get()),
-        }
-        return preset
-
-    def apply_settings_button_clicked(self):
-        if self.camera.is_triggered:
-            messagebox.showinfo("Info" , "Can't change settings\nCamera in trigger mode")
-            return
-        preset = self.get_preset_from_sliders()
-        default_preset = preset.copy()
-        default_preset['fps'] = 24.0
-        trigger_preset = preset
-
-        self.camera.set_default_preset(default_preset)
-        self.camera.set_trigger_preset(trigger_preset)
-        self.camera.apply_settings_clicked()
-
-    def play_pause_button_clicked(self):
-        self.play_pause_index = 1 - self.play_pause_index
-        self.play_pause_button.config(image=self.play_pause_images[self.play_pause_index])
-        self.play_pause_button.image = self.play_pause_images[self.play_pause_index]
-
-
-
-    def switch_color(self, command:str):
-        if command == "COLOR":
-            if self.camera.SupportMonoFormat:
-                self.mono_button.config(
-                    bg="SystemButtonFace",
-                    activebackground="SystemButtonFace",
-                    state="normal",
-                    fg="black",
-                    activeforeground="black",
-                )
-
-            self.colored_button.config(
-                bg="green",
-                activebackground="green",
-                state="active",
-                fg="white",
-                activeforeground="white",
-            )
-            self.camera.isColored = True
-        elif command == "MONO":
-            if self.camera.SupportColorFormat:
-                self.colored_button.config(
-                    bg="SystemButtonFace",
-                    activebackground="SystemButtonFace",
-                    state="normal",
-                    fg="black",
-                    activeforeground="black",
-                )
-            self.mono_button.config(
-                bg="green", 
-                activebackground="green", 
-                state="active",
-                fg="white",
-                activeforeground="white",
-            )
-            self.camera.isColored = False
-
+    
 class GUI:
 
-    def __init__(self, root: tk.Tk = None):
+    def __init__(self, root: tk.Tk, cameras_count:int = 1):
         self.root = root
         self.video_editor = VideoEditor(self.root)
-        self.camera = Camera(self.root,  self.video_editor)
-        self.styles = {}
-        self.image_view = ImageViewContainer(self.root, self.video_editor,self.styles ,self.camera)
-        self.camera.load_image_view(self.image_view)
+        self.canvases:list[tk.Canvas] = []
+        self.fps_labels:list[tk.Label] = []
 
-        self.control_panel = ControlPanelContainer(self.root, self.camera,  self.styles, self.image_view)
+        self.cameras_count = cameras_count
 
-        self.configure_image_view()
-        self.configure_control_panel()
+        self.play_pause_index = 0
+
+        self.trigger_frame_enabled = False
+        
+        self.trigger_modes = {
+            "SOFTWARE" : True,
+            "LINE0" : False,
+            "LINE2" : False
+        }
+
+        general_control_frame_pos={"relx": 0.0,"rely": 0.0,"x": 0, "y": 0, "relwidth": 1.0, "relheight": 0.1}
+        general_image_frame_pos = {"relx" : 0.0 , "rely" : 0.1 , "x" : 0 , "y" : 0 , "relwidth" : 1.0 , "relheight" : 0.9}
+
+        self.general_control_frame = tk.Frame(self.root , bd=0 , bg="#fff3e0")
+        self.general_control_frame.place(general_control_frame_pos)
+
+        self.general_image_frame = tk.Frame(self.root , bd=0 , bg="#faf4ed")
+        self.general_image_frame.place(general_image_frame_pos)
+
+
+        self.__init_general_control_frame()
+        self.__init_general_image_frame()
+
+        self.drag_mode = False
+        self.drag_start_x = 0
+        self.drag_start_y = 0
+        self.current_drag_canvas = None
+
+    def __init_general_control_frame(self):
+        self.play_pause_images = [
+            tk.PhotoImage(file=img).subsample(20)
+            for img in ["assets/play_button.png", "assets/pause_button.png"]
+        ]
+        self.play_button = tk.Button(self.general_control_frame, image=self.play_pause_images[self.play_pause_index])
+        self.play_button.place(x=25 ,relx=0.0,  rely=0.5 , anchor="center" )
+
+        self.trigger_button = tk.Button(self.general_control_frame , text="Trigger" , font=("Verdana" , 12) , command= self.switch_trigger_frame)
+        self.trigger_button.place(relx=0.5 , rely=0.5 , anchor="center")
+
+        self.drag_button = tk.Button(self.general_control_frame , text="🔄 Move Canvases" , font=("Verdana", 12), command=self.switch_drag_mode)
+        self.drag_button.place(relx=0.8, rely=0.5, anchor="center")
+
+        self.trigger_frame = self.__init_trigger_frame()
+
+
+
+    def __init_general_image_frame(self): 
+        self.video_editor_image = tk.PhotoImage(file="assets/video_editor.png").subsample(10)
+        self.video_editor_button = tk.Button(self.root , image=self.video_editor_image)
+
+        self.video_editor_button.place(
+            relx=1.0,
+            rely=1.0,
+            x=-self.video_editor_button.winfo_reqwidth() - 5,
+            y=-self.video_editor_button.winfo_reqheight() - 5,
+        )
+
+
+        for i in range(self.cameras_count):
+            canvas = tk.Canvas(self.general_image_frame)
+            self.canvases.append( canvas )
+            self.fps_labels.append( tk.Label(self.general_image_frame , text="FPS :" , font=("Arial" , 12)) ) 
+
+            canvas.bind("<Button-1>" , self.start_drag)
+            canvas.bind("<B1-Motion>" , self.on_drag)
+            canvas.bind("<ButtonRelease-1>" , self.stop_drag)
+
+
+        self.update_canvas_layout()
+
+    def play_button_click(self):
+        self.play_pause_index = 1 - self.play_pause_index
+        self.play_button.config(image=self.play_pause_images[self.play_pause_index])
+        self.play_button.image = self.play_pause_images[self.play_pause_index]
+
+    def switch_trigger_input(self , input = "SOFTWARE"):
+        self.switch_trigger_frame()
+        input = input.lower()
+        inputs = {
+            "software" : (True , False , False),
+            "line0" : (False , True , False),
+            "line2" : (False , False , False),
+        }
+        if input in inputs:
+            soft , l0 , l2 = inputs[input]
+            self.SOFTWARE_enabled = soft
+            self.LINE0_enabled = l0
+            self.LINE2_enabled = l2
+        self.trigger_button.config(text=input.upper() , background="green" , activebackground="green" , foreground="white" , activeforeground="white")
+        self.switch_trigger_frame()
+        
+    def switch_trigger_frame(self):
+        self.trigger_frame_enabled = not self.trigger_frame_enabled
+        if self.trigger_frame_enabled:
+            self.trigger_frame.place(relx=0.5 , rely=0.5 , anchor="center")
+            self.trigger_frame.lift()
+        else:
+            self.cancel_trigger()
+            self.trigger_frame.lower()
+            self.trigger_frame.place_forget()
+
+    def cancel_trigger(self):
+        self.trigger_button.config(text="Trigger" , background="SystemButtonFace" , activebackground="SystemButtonFace" , foreground="black" , activeforeground="black")
+
+    def switch_drag_mode(self):
+        self.drag_mode = not self.drag_mode
+        if self.drag_mode:
+            self.drag_button.config(bg="lightblue", text="✅ Move Mode")
+
+            for canvas in self.canvases:
+                canvas.config(cursor="fleur")
+
+        else:
+            self.drag_button.config(bg="SystemButtonFace", text="🔄 Move Canvases")
+
+            for canvas in self.canvases:
+                canvas.config(cursor="")
+
+    def start_drag(self, event):
+        if not self.drag_mode :
+            return
+        self.current_drag_canvas = event.widget
+
+
+        self.drag_start_y = event.y
+
+
+    def on_drag(self , event):
+
+        if not self.drag_mode:
+            return
+
+        dy = event.y - self.drag_start_y
+        current_index = self.canvases.index(self.current_drag_canvas)
+        if dy > 0:
+            self.current_drag_canvas.configure(height = self.current_drag_canvas.winfo_height() + int(dy))
+
+            if self.current_drag_canvas.winfo_height() > self.general_image_frame.winfo_height():
+                self.current_drag_canvas.configure(height = self.general_image_frame.winfo_height())
+            if current_index  < self.cameras_count - 1 and delta_y >= 0:
+                delta_y = event.y - self.canvases[current_index+1].winfo_height() // 2
+                current_index+=1
+                self.canvases[current_index].grid(row=current_index)
+                self.canvases[current_index+1].grid(row=current_index-1)
+            
+        elif dy < 0: 
+            self.current_drag_canvas.configure(height = self.current_drag_canvas.winfo_height() - int(dy))
+
+            if self.current_drag_canvas.winfo_height() < self.general_image_frame.winfo_height():
+                self.current_drag_canvas.configure(height = self.general_image_frame.winfo_height())
+            if current_index > 0 and delta_y < 0:
+                delta_y = event.y - self.canvases[current_index-1].winfo_height() // 2
+                current_index-=1    
+                self.canvases[current_index].grid(row=current_index)
+                self.canvases[current_index-1].grid(row=current_index+1)
 
         
 
-        self.themes = {
-            "RetroCream" : {
-                "control_panel" : "#fff3e0",
-                "trigger_panel" : "#f5e6d3",
-                "image_frame" : "#faf4ed",
-            },
-            "Nature" : {
-                "control_panel" : "#3a6351",
-                "trigger_panel" : "#f2e8cf",
-                "image_frame" : "#e4dccf"
-            },
-            "CyberPunk": {
-                "control_panel" : "#1a1a1a",
-                "trigger_panel" : "#2d2d2d",
-                "image_frame" : "#0a0a0a"
-            },
-            "ProDark" : {
-                "control_panel" : "#2b2b2b",
-                "trigger_panel" : "#363636",
-                "image_frame" : "#212121"
-            }
-        }
-        self.apply_theme(self.themes['Nature'])
+    def stop_drag(self , event):
+        if not self.drag_mode or self.current_drag_canvas is None:
+            return
+        self.current_drag_canvas = None
 
 
-    def configure_control_panel(self):
-        self.control_panel.play_pause_button.bind("<Button-1>" , lambda e : play_pause_button_clicked())
-
-        def play_pause_button_clicked():
-            self.control_panel.play_pause_button_clicked()
-            self.camera.switch_capture()
-
-    def configure_image_view(self):
-        self.image_view.video_editor_button.configure(command= self.open_video_editor)
-        self.image_view.image_frame.bind('<Button-1>' , lambda e : self.camera.switch_crosshair())
-
-    def switch_crosshair(self):
-        self.camera.switch_crosshair()
-
-    def open_video_editor(self):
-        self.video_editor.place(relx=0.5 , rely=0.5, anchor="center", relwidth=1, relheight=1)
-        self.video_editor.lift()
-
-    def apply_theme(self, theme):
-        self.control_panel.control_panel_frame.config(bg=theme['control_panel'])
-        self.image_view.image_frame.config(bg=theme['image_frame'])
 
 
-def add_slider_with_entry(
-    root: tk.Tk,
-    label_text: str,
-    slider_range: dict,
-    row: int,
-    initial_value=None,
-    chkbutton: bool = False,
-    chkbutton_command=None,
-    chkbutton_initial:bool =False
-):
-    slider_label = tk.Label(
-        root, text=label_text, font=("Segoe UI", 11), bg="#e3f0fc", fg="#3B4252"
-    )
+    def update_canvas_layout(self):
+        for i , canvas in enumerate(self.canvases):
+            canvas.place(relwidth=1.0)
 
-    min_val = slider_range["min"]
-    max_val = slider_range["max"]
-    inc = slider_range["inc"]
+    def update_fps_labels(self , fps , fps_label:tk.Label):
+        fps_label.configure(text=f"FPS : {fps if fps else "None"}")
 
-    slider = tk.Scale(
-        root,
-        from_=min_val,
-        to=max_val,
-        orient=tk.HORIZONTAL,
-        resolution=inc,
-        bg="#e3f0fc",
-        troughcolor="#c7d9f0",
-        activebackground="#aec5e0",
-        sliderrelief="flat",
-        width=12,
-        length=150,
-        font=("Segoe UI", 8),
-    )
+    def __init_trigger_frame(self):
+        trigger_frame = tk.Frame(self.general_control_frame,bg="#f5e6d3",relief=tk.RAISED,bd=2)
 
-    if initial_value is not None:
-        slider.set(initial_value)
-    else:
-        slider.set(min_val)
+        self.software_btn = tk.Button(
+            trigger_frame,
+            text="SOFTWARE",
+            font=("Verdana", 10),
+            command=lambda: self.set_trigger_mode("SOFTWARE")
+        )
+        
+        self.line0_btn = tk.Button(
+            trigger_frame,
+            text="LINE0", 
+            font=("Verdana", 10),
+            command=lambda: self.set_trigger_mode("LINE0")
+        )
+        
+        self.line2_btn = tk.Button(
+            trigger_frame,
+            text="LINE2",
+            font=("Verdana", 10), 
+            command=lambda: self.set_trigger_mode("LINE2")
+        )
 
-    entry = tk.Entry(
-        root,
-        width=10,
-        font=("Segoe UI", 11),
-        bg="white",
-        highlightcolor="#8fa8c2",
-        fg="#2E3440",
-        relief="flat",
-        highlightthickness=1,
-        borderwidth=0,
-    )
-    entry.insert(0, slider.get())
+        self.software_btn.grid(row=0, column=0, padx=2, pady=2, sticky="ew")
+        self.line0_btn.grid(row=0, column=1, padx=2, pady=2, sticky="ew")
+        self.line2_btn.grid(row=0, column=2, padx=2, pady=2, sticky="ew")
 
+        self.update_trigger_buttons_appearance()
 
+        return trigger_frame
     
 
-    slider_label.grid(row=row, column=1, padx=5, pady=5, sticky="w")
-    slider.grid(row=row, column=2)
-    entry.grid(row=row, column=3, padx=5, pady=5)
-
-    def update_entry(value=None):
-        if value is None:
-            value = slider.get()
-        entry.delete(0, "end")
-        entry.insert(0, str(value))
-
-    def adjust_to_nearest_step(value, start, end, step):
-        if value < start:
-            return start
-        if value > end:
-            return end
-        offset = value - start
-        nearest_step = round(offset / step)
-        adjusted_value = start + nearest_step * step
-        return min(max(adjusted_value, start), end)
-
-    def update_slider(event):
-        try:
-            value = float(entry.get())
-            if min_val <= value <= max_val:
-                adjusted = adjust_to_nearest_step(value, min_val, max_val, inc)
-                slider.set(adjusted)
-                update_entry(adjusted)
+    def update_trigger_buttons_appearance(self):
+        for mode, btn in zip(["SOFTWARE", "LINE0", "LINE2"], 
+                           [self.software_btn, self.line0_btn, self.line2_btn]):
+            if self.trigger_modes[mode]:
+                btn.config(
+                    bg="green",
+                    activebackground="darkgreen",
+                    fg="white",
+                    activeforeground="white"
+                )
             else:
-                messagebox.showerror("Ошибка", "Значение вне допустимого диапазона.")
-                update_entry(slider.get())
-        except ValueError:
-            messagebox.showerror("Ошибка", "Введите числовое значение.")
-            update_entry(slider.get())
+                btn.config(
+                    bg="SystemButtonFace",
+                    activebackground="SystemButtonFace",
+                    fg="black",
+                    activeforeground="black"
+                )
+        
+        active_mode = next((mode for mode, active in self.trigger_modes.items() if active), "Trigger")
+        self.trigger_button.config(text=active_mode)
 
-    slider.config(command=lambda val: update_entry())
-    entry.bind("<Return>", update_slider)
+    def set_trigger_mode(self, mode: str):
+        for trigger_mode in self.trigger_modes:
+            self.trigger_modes[trigger_mode] = (trigger_mode == mode)
 
-    return slider, entry
+        self.update_trigger_buttons_appearance()
+        
+        self.switch_trigger_frame()
+        

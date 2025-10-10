@@ -427,6 +427,10 @@ class VideoEditor(tk.Frame):
         self.preview_image.image = image_tk
         self.preview_text.config(text=f"Frame: {index + 1} Time: {timestamp if timestamp or timestamp == 0.0 else 'None'}µs")
 
+    def open(self):
+        self.place(relx=0.5 , rely=0.5, anchor="center", relwidth=1, relheight=1)
+        self.lift()
+        
     def close(self):
         self.place_forget()
 
