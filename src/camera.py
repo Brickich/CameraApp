@@ -63,14 +63,13 @@ class CameraControl:
             device = self.devices[i]
             print(f"Device {i+1}: {device}")  
             model = device
-            model.lower()
             
             type = (
-                "MER3" if "mer3" in model else
-                "MER2" if "mer2" in model else
-                "MER" if "mer" in model else
+                "MER3" if "MER3" in model else
+                "MER2" if "MER2" in model else
+                "MER" if "MER" in model else
                 model.upper())
-            
+            print(type)
             image_convert = self.device_manager.create_image_format_convert()
             camera = Camera(cam , type , image_convert)
             self.cameras.append(camera)
@@ -95,7 +94,7 @@ class Camera:
 
         self.trigger_start_time = None
         self.captured_frames = 0
-        self.quantity_of_frames = 100
+        self.QuantityOfFrames = 100
         self.timeout = 12.0
 
         self.trigger_event = Event()
@@ -107,7 +106,9 @@ class Camera:
         self.image_angle =0 
 
         self.images:list[Image.Image] =[]
+        self.raw_images:list = []
         self.timestamps:list[float] = []
+
         
         self.__init__device(cam , type , image_convert) 
 
@@ -162,27 +163,27 @@ class Camera:
             
 
             default_preset = {
-                "width" : self.Width.get_range().get("max"),
-                "height" : 220,
-                "exposure_time" :40000.0,
-                "fps": 24.0,
-                "gain" : self.Gain.get_range().get("max"),
-                "trigger_delay" : self.TriggerDelay.get_range().get("min"),
-                "quantity_of_frames" : self.quantity_of_frames,
-                "offsetX" : 0 , 
-                "offsetY" : 0,
+                "Width" : self.Width.get_range().get("max"),
+                "Height" : 220,
+                "ExposureTime" :40000.0,
+                "FrameRate": 24.0,
+                "Gain" : self.Gain.get_range().get("max"),
+                "TriggerDelay" : self.TriggerDelay.get_range().get("min"),
+                "QuantityOfFrames" : self.QuantityOfFrames,
+                "OffsetX" : 0 , 
+                "OffsetY" : 0,
             }
 
             self.preset_manager.change_preset("default" , default_preset)
 
             preview_preset = default_preset.copy()
-            preview_preset["exposure_time"] = 40000
+            preview_preset["ExposureTime"] = 40000.0
 
             self.preset_manager.change_preset("preview" , preview_preset)
 
             trigger_preset = default_preset.copy()
-            trigger_preset['exposure_time'] = self.ExposureTime.get_range().get("min")
-            trigger_preset["fps"] = 1000.0
+            trigger_preset['ExposureTime'] = self.ExposureTime.get_range().get("min")
+            trigger_preset["FrameRate"] = 1000.0
 
             self.preset_manager.change_preset("trigger" , trigger_preset)
 
@@ -191,33 +192,38 @@ class Camera:
             print(f"{"Colored" if self.colored else "Mono"} Camera")
         except Exception as e:
             print(f"{str(e)}")
+    
+    def get_raw_image(self) :
+        raw_image = self.cam.data_stream[0].get_image()
+        return raw_image
+
+    def convert_raw_image(self , raw_image):
+        height = raw_image.frame_data.height
+        width = raw_image.frame_data.width
+        if not self.colored:
+            mono_image_array, mono_image_buffer_length = self.convert_to_special_pixel_format(raw_image, gx.GxPixelFormatEntry.MONO8)
+            if mono_image_array is None:
+                return
+            numpy_image = gx.numpy.frombuffer( mono_image_array, dtype=gx.numpy.ubyte, count=mono_image_buffer_length).reshape(height, width)
+            return Image.fromarray(numpy_image, "L")
+            
+        else:
+            rgb_image_array, rgb_image_buffer_length = self.convert_to_special_pixel_format(raw_image, gx.GxPixelFormatEntry.RGB8)
+            if rgb_image_array is None:
+                return None
+            numpy_image = gx.numpy.frombuffer(rgb_image_array, dtype=gx.numpy.ubyte, count=rgb_image_buffer_length).reshape(height, width, 3)
+            return Image.fromarray(numpy_image, "RGB")
 
     def get_image(self) -> tuple[Image.Image] | None:
         try:
-            raw_image = self.cam.data_stream[0].get_image()
-            timestamp = raw_image.get_timestamp()
+            raw_image = self.get_raw_image()
             if raw_image is None:
                 return None
 
-            height = raw_image.frame_data.height
-            width = raw_image.frame_data.width
 
-            if not self.colored:
-                mono_image_array, mono_image_buffer_length = self.convert_to_special_pixel_format(raw_image, gx.GxPixelFormatEntry.MONO8)
-                if mono_image_array is None:
-                    return
-                numpy_image = gx.numpy.frombuffer( mono_image_array, dtype=gx.numpy.ubyte, count=mono_image_buffer_length).reshape(height, width)
+            return self.convert_raw_image(raw_image)
 
-                return Image.fromarray(numpy_image, "L"), timestamp
             
-            else:
-                rgb_image_array, rgb_image_buffer_length = self.convert_to_special_pixel_format(raw_image, gx.GxPixelFormatEntry.RGB8)
-                if rgb_image_array is None:
-                    return None
-                numpy_image = gx.numpy.frombuffer(rgb_image_array, dtype=gx.numpy.ubyte, count=rgb_image_buffer_length).reshape(height, width, 3)
-
-                return Image.fromarray(numpy_image, "RGB"), timestamp
-
         except Exception as e:
             return None
 
@@ -226,7 +232,7 @@ class Camera:
         self.FrameRateMode.set("ON")
         self.TriggerMode.set("OFF")
 
-    def trigger_settings(self , trigger_source:gx.GxTriggerSourceEntry):
+    def trigger_settings(self , trigger_source:str):
         self.apply_preset(self.preset_manager.get_preset("trigger"))
         self.TriggerActivation.set(gx.GxTriggerActivationEntry.FALLINGEDGE)
         self.FrameRateMode.set("ON")
@@ -245,37 +251,22 @@ class Camera:
         self.OffsetX.set(0)
         self.OffsetY.set(0)
 
-        self.Width.set(preset['width'])
-        self.Height.set(preset['height'])
-
-
-        max_width = self.Width.get_range().get("max")
-
-
-        if max_width != preset['width']:
-            offsetX = int(max_width/2 - preset['width']/2)
-            offsetX_inc = self.OffsetX.get_range().get("inc")
-
-            offsetX_diff = offsetX % offsetX_inc
-            if offsetX_diff != 0:
-                offsetX -= offsetX_diff
-            if offsetX < offsetX_inc:
-                offsetX = self.OffsetX.get_range().get("min")
-            preset['offsetX'] = offsetX
-            self.cam.OffsetX.set(offsetX)
+        self.Width.set(preset["Width"])
+        self.Height.set(preset["Height"])
 
         if self.type == "MER2":
-            if preset['exposure_time'] < 20:
+            if preset["ExposureTime"] < 20:
                 self.ExposureTimeMode.set("UltraShort")
             else:
                 self.ExposureTimeMode.set("Standard")
 
-        self.ExposureTime.set(preset['exposure_time'])
-        self.FrameRate.set(preset['fps'])
-        self.Gain.set(preset['gain'])
-        self.TriggerDelay.set(preset['trigger_delay'])
-        self.quantity_of_frames = preset["quantity_of_frames"]
-        self.OffsetY.set(preset['offsetY'])
+        self.ExposureTime.set(preset['ExposureTime'])
+        self.FrameRate.set(preset['FrameRate'])
+        self.Gain.set(preset['Gain'])
+        self.TriggerDelay.set(preset['TriggerDelay'])
+        self.QuantityOfFrames = preset["QuantityOfFrames"]
+        self.OffsetX.set(preset["OffsetX"])
+        self.OffsetY.set(preset['OffsetY'])
         
 
     def save_images(self , dir_path ):
@@ -286,7 +277,7 @@ class Camera:
         result = self.get_image()
         if result is None:
             return None
-        image, timestamp = result
+        image = result
         if not image:
             return None
         if self.image_angle!=0:
@@ -299,7 +290,7 @@ class Camera:
         if self.crosshair_enabled:
             image = add_crosshair(image)
 
-        return image, timestamp
+        return image
 
     def switch_recording(self):
         self.is_recording = not self.is_recording
@@ -326,7 +317,7 @@ class Camera:
             print(f"    Width : {self.Width.get()}    Height: {self.Height.get()}")
             print(f"    Exposure Time: {self.ExposureTime.get()}    Gain: {self.Gain.get()} ")
             print(f"    Trigger Delay : {self.TriggerDelay.get()}")
-            print(f"    Quantity of Frames : {self.quantity_of_frames}")
+            print(f"    Quantity of Frames : {self.QuantityOfFrames}")
             print("-------------------------------------------")
 
     def switch_trigger(self):
