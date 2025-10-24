@@ -3,6 +3,7 @@ from PIL import Image, ImageDraw
 from threading import Event
 import json
 
+
 class PresetManager:
     def __init__(self):
         self.presets = {
@@ -69,19 +70,18 @@ class CameraControl:
                 "MER2" if "MER2" in model else
                 "MER" if "MER" in model else
                 model.upper())
-            print(type)
             image_convert = self.device_manager.create_image_format_convert()
-            camera = Camera(cam , type , image_convert)
+            camera = Camera(cam , type , image_convert , model)
             self.cameras.append(camera)
-            print(f"The {model.upper()} is synchronised")
 
         
 
 
 class Camera:
-    def __init__(self ,  cam, type , image_convert):
+    def __init__(self ,  cam, type , image_convert , model):
         self.cam = None
         self.type = None
+        self.model = model
         self.image_convert =  None
         self.preset_manager = PresetManager()
 
@@ -92,7 +92,6 @@ class Camera:
         self.SupportMonoFormat = False
 
 
-        self.trigger_start_time = None
         self.captured_frames = 0
         self.QuantityOfFrames = 100
         self.timeout = 12.0
@@ -189,7 +188,7 @@ class Camera:
 
             self.default_settings()
 
-            print(f"{"Colored" if self.colored else "Mono"} Camera")
+            print(f'{self.model} {"Colored" if self.colored else "Mono"} Camera')
         except Exception as e:
             print(f"{str(e)}")
     
@@ -313,16 +312,18 @@ class Camera:
 
     def print_settings(self):
         if self.cam:
-            print(f"    Current FPS : {self.CurrentFrameRate.get()}      FrameRate : {self.FrameRate.get()}")
-            print(f"    Width : {self.Width.get()}    Height: {self.Height.get()}")
-            print(f"    Exposure Time: {self.ExposureTime.get()}    Gain: {self.Gain.get()} ")
-            print(f"    Trigger Delay : {self.TriggerDelay.get()}")
-            print(f"    Quantity of Frames : {self.QuantityOfFrames}")
-            print("-------------------------------------------")
+            print("{} : FrameRate = {}\n" \
+            "Width = {}\t Height = {}\n" \
+            "ExposureTime = {}\tTriggerDelay = {}\tGain = {}\n" \
+            "TriggerSource = {}\t Frames = {}\n"
+                  .format(self.model , self.CurrentFrameRate.get() ,
+                        self.Width.get() , self.Height.get() ,
+                        self.ExposureTime.get() , self.TriggerDelay.get() ,self.Gain.get(),
+                        self.TriggerSource.get() ,self.QuantityOfFrames ))
 
     def switch_trigger(self):
         self.is_triggered = not self.is_triggered
-        print(f"Trigger {"ON" if self.is_triggered else "OFF"}")
+        print(f'{self.model} {"Triggered" if self.is_triggered else ": Trigger OFF"}\n')
 
 
 
@@ -330,7 +331,7 @@ class Camera:
         
     def switch_capture(self):
         self.switch_recording()
-        print(f"Recording is {'ON' if self.is_recording else 'OFF'}")
+        print(f'{self.model} {'Recording' if self.is_recording else 'OFF'}')
         if not self.is_recording:
             self.capture_event.set()
             return
@@ -338,35 +339,34 @@ class Camera:
 
     def switch_crosshair(self):
         self.crosshair_enabled = not self.crosshair_enabled
-        print(f"Crosshair is {"ON" if self.crosshair_enabled else "OFF"}")
+        print(f"{self.model} Crosshair is {"ON" if self.crosshair_enabled else "OFF"}\n")
 
     def flip_image_horizontally(self):
         self.flip_h_enabled = not self.flip_h_enabled
-        print("Image flipped HORIZONTALLY")
+        print("{} Image flipped HORIZONTALLY".format(self.model))
 
     def flip_image_vertically(self):
         self.flip_v_enabled = not self.flip_v_enabled
-        print("Image flipped VERTICALLY")
+        print("{} Image flipped VERTICALLY".format(self.model))
 
     def rotate_image_right(self):
         self.image_angle -= 90
         if abs(self.image_angle) == 360:
             self.image_angle =0
-        print(f"Current image angle : {self.image_angle}")
+        print(f"{self.model} Current image angle : {self.image_angle}")
 
     def rotate_image_left(self):
         self.image_angle +=90
         if abs(self.image_angle) == 360:
             self.image_angle =0
-        print(f"Current image angle : {self.image_angle}")
+        print(f"{self.model} Current image angle : {self.image_angle}")
 
     def switch_white_balance(self):
         self.cam.BalanceWhiteAuto.set(gx.GxAutoEntry.ONCE)
-        print(f"Auto white balance is ON")
 
     def close(self):
         if self.cam:
-            print("Camera is off")
+            print("{} is off".format(self.model))
             self.TriggerMode.set("OFF")
             self.cam.close_device()
 
