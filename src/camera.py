@@ -108,6 +108,7 @@ class Camera:
         self.raw_images:list = []
         self.timestamps:list[float] = []
 
+
         
         self.__init__device(cam , type , image_convert) 
 
@@ -129,8 +130,7 @@ class Camera:
             self.TriggerDelay = self.FeatureControl.get_float_feature("TriggerDelay")
             self.TriggerSelector = self.FeatureControl.get_enum_feature("TriggerSelector")
             self.TriggerActivation = self.FeatureControl.get_enum_feature("TriggerActivation")
-            # print(self.cam.TriggerActivation.get_range())
-            # print(self.TriggerActivation.get())
+
             self.FrameRateMode = self.FeatureControl.get_enum_feature("AcquisitionFrameRateMode")
             self.TriggerSoftware = self.FeatureControl.get_command_feature("TriggerSoftware")
             self.LineMode = self.FeatureControl.get_enum_feature("LineMode")

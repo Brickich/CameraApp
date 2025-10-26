@@ -1,9 +1,10 @@
 import gxipy as gx
 
 from src.camera import Camera , CameraControl
-from src.gui import GUI , SettingsPane
-from tkinter import Tk , messagebox , Canvas , Label
-from threading import Thread
+from src.gui import GUI 
+import tkinter as tk
+from tkinter import messagebox
+from threading import Thread 
 import time
 from PIL import Image , ImageTk
 import os
@@ -11,21 +12,28 @@ import os
 
 class CameraApp:
     def __init__(self):
-        self.root = Tk()
+        self.root = tk.Tk()
+
         self.root.geometry(f"{int(self.root.winfo_screenwidth()/2)}x{int(self.root.winfo_screenheight()/2)}")
         self.root.title("Camera Control App")   
         self.root.protocol("WM_DELETE_WINDOW", self.destroy)
         self.camera_control = CameraControl()
         self.cameras:list[Camera] = self.camera_control.cameras
 
+        
+
         self.gui = GUI(self.root , self.cameras)
+
+
+
+
         self.camera_attr = {}
 
-        self.gui.play_button.bind("<Button-1>" , lambda e : self.play_button_click() , add="+")
 
-        self.gui.frame_viewer_button.bind('<Button-1>' , lambda e : [self.gui.frame_viewer.enable() , self.gui.main_pane.pack_forget()])
+        self.gui.frame_viewer_button.bind('<Button-1>' , lambda e : self.enable_frame_viewer())
         self.gui.frame_viewer.camera_app_button.bind("<Button-1>" , lambda e : [self.gui.main_pane.pack(fill="both" , expand=True), self.gui.frame_viewer.main_window.pack_forget()])
         
+
 
 
         for i, camera in enumerate(self.cameras):
@@ -34,10 +42,10 @@ class CameraApp:
             fps_label = self.gui.canvas_frame.fps_labels[i]
             settings_pane.trigger_button.bind("<Button-1>" , lambda e , cam = camera: self.switch_camera_trigger(cam) , add="+")
             
-            settings_pane.apply_button.bind("<Button-1>" , lambda e , cam = camera: self.apply_settings(cam))
-            settings_pane.trigger_mode_button.bind("<Button-1>" , lambda e , cam = camera: self.trigger_mode(cam) )
-            settings_pane.preview_mode_button.bind("<Button-1>" , lambda e , cam = camera : self.preview_mode(cam))
-
+            settings_pane.apply_button.bind("<Button-1>" , lambda e , cam = camera: self.apply_settings(cam) , add="+")
+            settings_pane.trigger_mode_button.bind("<Button-1>" , lambda e , cam = camera: self.trigger_mode(cam) , add="+")
+            settings_pane.preview_mode_button.bind("<Button-1>" , lambda e , cam = camera : self.preview_mode(cam), add="+")
+            settings_pane.play_button.bind("<Button-1>" , lambda e , cam = camera : self.play_button_click(cam) , add="+" )
             self.camera_attr[camera] = {"canvas" : canvas , "settings_pane" : settings_pane , "fps" : fps_label}
 
             
@@ -51,6 +59,7 @@ class CameraApp:
         camera.images.clear()
         camera.timestamps.clear()
         camera.capture_event.set()
+
 
         if camera.is_recording:
             camera.switch_recording()
@@ -134,8 +143,7 @@ class CameraApp:
 
     def display_images(self , camera:Camera):
         
-        
-        def update_canvas(image:Image.Image , canvas:Canvas):
+        def update_canvas(image:Image.Image , canvas:tk.Canvas):
 
             canvas_width = canvas.winfo_width()
             canvas_height = canvas.winfo_height()
@@ -192,16 +200,16 @@ class CameraApp:
             messagebox.showinfo("Warning" , "Camera waits for trigger")
             return
         
-        self.camera_attr[camera]["settings_pane"].on_trigger_switch()
-
-        was_recording  = camera.is_recording
+        was_recording  = not bool(camera.is_recording)
         if was_recording:
             camera.switch_capture()
+
+        self.camera_attr[camera]["settings_pane"].on_trigger_switch()
 
         camera.apply_preset(camera.preset_manager.get_preset("default"))
         if was_recording:
             camera.switch_capture()
-        Thread(target=self.display_images , args=(camera,) , daemon=True).start()
+            Thread(target=self.display_images , args=(camera,) , daemon=True).start()
 
         
 
@@ -212,7 +220,7 @@ class CameraApp:
         
         self.camera_attr[camera]["settings_pane"].on_preview_switch()
 
-        was_recording = camera.is_recording
+        was_recording = bool(camera.is_recording)
         if was_recording:
             camera.switch_capture()
         camera.apply_preset(camera.preset_manager.get_preset("preview"))
@@ -225,9 +233,9 @@ class CameraApp:
         if len(camera.images) > 3:
             dir_path = check_dir(f'output/Camera{self.cameras.index(camera)+1}')
             camera.preset_manager.save_to_file("trigger" , f'{dir_path}/TriggerPreset.json')
-            self.gui.disable_play_button()
             Thread(target=camera.save_images, args=(dir_path,) , daemon=True).start()
             Thread(target=self.gui.frame_viewer.load_images(self.cameras.index(camera) , camera.images , camera.timestamps) , daemon=True).start()
+            self.enable_frame_viewer()
             return
 
 
@@ -249,7 +257,7 @@ class CameraApp:
         camera.preset_manager.change_preset("trigger" , trigger_preset)
         camera.preset_manager.change_preset("preview" , preview_preset)
 
-        was_recording = camera.is_recording
+        was_recording = bool(camera.is_recording)
         if was_recording:
             camera.switch_capture()
         print(trigger_preset)
@@ -257,21 +265,21 @@ class CameraApp:
 
         self.camera_attr[camera]["fps"].configure(text=f'FPS : {camera.CurrentFrameRate.get()}')
 
-        camera.print_settings()
-        self.trigger_mode(camera)
+        self.camera_attr[camera]["settings_pane"].on_trigger_switch()
 
+        camera.apply_preset(camera.preset_manager.get_preset("default"))
         if was_recording:
             camera.switch_capture()
             Thread(target=self.display_images , args=(camera,) , daemon=True).start()
 
-    def play_button_click(self):
-        for camera in self.cameras:
-            if camera.is_triggered:
-                self.stop_camera_trigger(camera)
-            camera.switch_capture()
-            if camera.is_recording:
-                Thread(target=self.display_images, args=(camera,) , daemon=True ).start()
+    def play_button_click(self , camera:Camera):
+        camera.switch_capture()
+        if camera.is_recording:
+            Thread(target=self.display_images, args=(camera,) , daemon=True ).start()
 
+    def enable_frame_viewer(self):
+        self.gui.frame_viewer.enable()
+        self.gui.main_pane.pack_forget()
 
     def run(self):
         self.root.mainloop()

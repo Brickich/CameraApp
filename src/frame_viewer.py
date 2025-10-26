@@ -19,9 +19,6 @@ class FrameViewer:
         
 
     
-        self.camera_width = 2440
-        self.camera_height = 400
-        self.preview_width = 800 
         
         self.camera_index = None
         self.camera_attributes = []
@@ -80,7 +77,6 @@ class FrameViewer:
         self.root.bind("<Left>", lambda e: self.previous_button_click())
         self.root.bind("<space>", lambda e: self.toggle_video_playback())
         
-        self.frame_panel.bind("<Configure>", self._on_panel_resize)
         
         self.button_frame.pack(side="top", fill="x", pady=5)
         # self.enable()
@@ -100,9 +96,6 @@ class FrameViewer:
             self.camera_attributes[i]["label"] = timestamp_label
             self.camera_attributes[i]["timestamp_label"] = timestamp_label
 
-    def _on_panel_resize(self, event):
-        self.current_frame_size = None  
-        self._update_all_frames()
 
     def _get_scaled_image(self, image, target_width, target_height):
         cache_key = (id(image), target_width, target_height)
@@ -135,13 +128,6 @@ class FrameViewer:
         
         return photo_image
 
-
-    def _update_all_frames(self):
-        if self.camera_index is not None:
-            self._update_single_frame(self.camera_index)
-        else:
-            for i in range(self.cameras_amount):
-                self._update_single_frame(i)
 
     def _update_single_frame(self, camera_index):
         attr = self.camera_attributes[camera_index]
@@ -180,8 +166,8 @@ class FrameViewer:
                 new_width = canvas_width
                 new_height = int(new_width / image_ratio)
 
-
-            resized_image = image.resize((new_width , new_height) , Image.Resampling.BOX)
+                                                                
+            resized_image = image.resize((new_width , new_height))
             photo_image = ImageTk.PhotoImage(resized_image)
 
             canvas.delete("all")
@@ -195,43 +181,31 @@ class FrameViewer:
             
             label.pack(side = "bottom" , anchor = "center")
 
-    def preprocess_images(self, images):
-        processed_images = []
-        for img in images:
-            if img.width > self.preview_width:
-                ratio = self.preview_width / img.width
-                new_height = int(img.height * ratio)
-                img_resized = img.resize((self.preview_width, new_height), Image.Resampling.LANCZOS)
-            else:
-                img_resized = img
-            processed_images.append(img_resized)
-        return processed_images
-
-    def load_test_images(self):
-        images = []
-        image_paths = glob.glob("assets/*.png")[:50] 
+    # def load_test_images(self):
+    #     images = []
+    #     image_paths = glob.glob("assets/*.png")[:50] 
         
-        for img_path in image_paths:
-            try:
-                image = Image.open(img_path)
-                if image.mode != 'RGB':
-                    image = image.convert('RGB')
-                images.append(image)
-            except Exception as e:
-                print(f"Error loading image {img_path}: {e}")
+    #     for img_path in image_paths:
+    #         try:
+    #             image = Image.open(img_path)
+    #             if image.mode != 'RGB':
+    #                 image = image.convert('RGB')
+    #             images.append(image)
+    #         except Exception as e:
+    #             print(f"Error loading image {img_path}: {e}")
         
-        if not images:
-            for i in range(10):
-                img = Image.new('RGB', (self.camera_width, self.camera_height), 
-                              color=(i * 25, i * 15, i * 35))
-                images.append(img)
+    #     if not images:
+    #         for i in range(10):
+    #             img = Image.new('RGB', (self.camera_width, self.camera_height), 
+    #                           color=(i * 25, i * 15, i * 35))
+    #             images.append(img)
         
-        processed_images = self.preprocess_images(images)
-        timestamps = list(range(len(processed_images)))
+    #     processed_images = self.preprocess_images(images)
+    #     timestamps = list(range(len(processed_images)))
         
-        for i in range(len(self.camera_attributes)):
-            self.load_images(i, processed_images, timestamps)
-        self.show_all_images()
+    #     for i in range(len(self.camera_attributes)):
+    #         self.load_images(i, processed_images, timestamps)
+    #     self.show_all_images()
     
     def load_images(self, camera_index: int, images: list, timestamps: list):
         if not images:
@@ -242,7 +216,6 @@ class FrameViewer:
         attr["timestamps"] = timestamps
         attr["current_index"] = 0
         
-        self.image_cache.clear()
         
         self.camera_index = None
         self._update_single_frame(camera_index)
@@ -263,7 +236,6 @@ class FrameViewer:
         
         attr = self.camera_attributes[index]
         attr["canvas"].pack(fill="both", expand=True, padx=5, pady=5)
-        attr["canvas"].update_idletasks()
         self._update_single_frame(index)
         
         for i, button in enumerate(self.camera_buttons):
@@ -429,8 +401,6 @@ class FrameViewer:
                 attr["canvas"].delete("all")
                 self._update_single_frame(self.camera_attributes.index(attr))
             
-
-        self.image_cache.clear()
         self.show_all_images()
 
     def export_video(self):
@@ -479,10 +449,10 @@ class FrameViewer:
     def enable(self):
         self.main_window.pack(fill="both", expand=True)
 
-if __name__ == "__main__":
-    root = tk.Tk()
-    root.title("High-Speed Camera Viewer - Optimized")
-    root.geometry("1200x800")
+# if __name__ == "__main__":
+#     root = tk.Tk()
+#     root.title("High-Speed Camera Viewer - Optimized")
+#     root.geometry("1200x800")
     
-    app = FrameViewer(root, cameras_amount=4)
-    root.mainloop()
+#     app = FrameViewer(root, cameras_amount=4)
+#     root.mainloop()
