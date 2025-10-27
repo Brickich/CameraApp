@@ -121,10 +121,7 @@ class CameraApp:
 
         camera.default_settings()
 
-        if not camera.is_recording:
-            camera.switch_recording()
 
-        Thread(target=self.display_images , args=(camera,) , daemon=True).start()
 
 
     def switch_camera_trigger(self, camera:Camera ):        
@@ -133,7 +130,8 @@ class CameraApp:
             self.camera_attr[camera]["settings_pane"].disable_trigger_button()
             self.stop_camera_trigger(camera)
             return
-
+        
+        self.camera_attr[camera]["settings_pane"].disable_play_button()
         self.camera_attr[camera]["settings_pane"].enable_trigger_button()
         self.camera_attr[camera]["settings_pane"].on_trigger_switch()
         trigger_source = self.camera_attr[camera]["settings_pane"].trigger_source
@@ -171,7 +169,7 @@ class CameraApp:
                 new_height = int(new_width / image_ratio)
 
 
-            resized_image = image.resize((new_width , new_height) , Image.Resampling.NEAREST)
+            resized_image = image.resize((new_width , new_height) , Image.Resampling.BOX)
             photo_image = ImageTk.PhotoImage(resized_image)
 
             canvas.delete("all")
@@ -200,7 +198,7 @@ class CameraApp:
             messagebox.showinfo("Warning" , "Camera waits for trigger")
             return
         
-        was_recording  = not bool(camera.is_recording)
+        was_recording  = bool(camera.is_recording)
         if was_recording:
             camera.switch_capture()
 
@@ -235,7 +233,7 @@ class CameraApp:
             camera.preset_manager.save_to_file("trigger" , f'{dir_path}/TriggerPreset.json')
             Thread(target=camera.save_images, args=(dir_path,) , daemon=True).start()
             Thread(target=self.gui.frame_viewer.load_images(self.cameras.index(camera) , camera.images , camera.timestamps) , daemon=True).start()
-            self.enable_frame_viewer()
+            self.root.after(3000 , self.enable_frame_viewer())
             return
 
 

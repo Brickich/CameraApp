@@ -26,7 +26,7 @@ class FrameViewer:
         
         self.is_playing = False
         self.video_direction = VideoDirection.forward
-        self.fps = 30
+        self.fps = 5
         self.video_thread = None
         
         self.image_cache = {}
@@ -97,36 +97,6 @@ class FrameViewer:
             self.camera_attributes[i]["timestamp_label"] = timestamp_label
 
 
-    def _get_scaled_image(self, image, target_width, target_height):
-        cache_key = (id(image), target_width, target_height)
-        
-        if cache_key in self.image_cache:
-            return self.image_cache[cache_key]
-        
-        img_width, img_height = image.size
-        img_ratio = img_width / img_height
-        target_ratio = target_width / target_height
-        
-        if target_ratio > img_ratio:
-            new_height = target_height
-            new_width = int(new_height * img_ratio)
-        else:
-            new_width = target_width
-            new_height = int(new_width / img_ratio)
-        
-        if new_width != img_width or new_height != img_height:
-            scaled_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-        else:
-            scaled_image = image
-        
-        photo_image = ImageTk.PhotoImage(scaled_image)
-        self.image_cache[cache_key] = photo_image
-        
-        if len(self.image_cache) > 50:
-            oldest_key = next(iter(self.image_cache))
-            del self.image_cache[oldest_key]
-        
-        return photo_image
 
 
     def _update_single_frame(self, camera_index):
@@ -143,6 +113,7 @@ class FrameViewer:
             image = attr["images"][index]
             
             canvas = attr["canvas"]
+
             canvas_width = canvas.winfo_width()
             canvas_height = canvas.winfo_height()
 
@@ -168,7 +139,7 @@ class FrameViewer:
 
                                                                 
             resized_image = image.resize((new_width , new_height))
-            photo_image = ImageTk.PhotoImage(resized_image)
+            photo_image = ImageTk.PhotoImage(resized_image , Image.Resampling.BOX)
 
             canvas.delete("all")
             canvas.create_image(canvas_width//2 , canvas_height//2 , image = photo_image , anchor = "center")
@@ -217,7 +188,7 @@ class FrameViewer:
         attr["current_index"] = 0
         
         
-        self.camera_index = None
+        self.camera_index = camera_index
         self._update_single_frame(camera_index)
     
     def update_frame(self, attr):
@@ -361,7 +332,7 @@ class FrameViewer:
         
         fps_frame = tk.Frame(button_frame)
         tk.Label(fps_frame, text="FPS:", font=("Segoe UI", 9)).pack(side="left")
-        self.fps_scale = tk.Scale(fps_frame, from_=1, to=60, orient="horizontal",
+        self.fps_scale = tk.Scale(fps_frame, from_=1, to=25, orient="horizontal",
                                command=self.set_fps, length=120, showvalue=True)
         self.fps_scale.set(self.fps)
         self.fps_scale.pack(side="left", fill="x", expand=True)

@@ -441,7 +441,7 @@ class SettingsPane(ttk.Frame):
             self.selected_trigger_source = trigger_mode
             self.trigger_source = trigger_mode
 
-        self.trigger_button = ttk.Button(self, text="Start trigger", style="Active.TButton")
+        self.trigger_button = ttk.Button(self, text="Start trigger", style="Inactive.TButton")
         self.trigger_button.pack(anchor="center", pady=(5, 0))
         
         self.__init_buttons()
@@ -598,7 +598,7 @@ class SettingsPane(ttk.Frame):
             self.control_button_frame.grid_columnconfigure(i, weight=1)
     
     def enable_trigger_button(self):
-        self.trigger_button.configure(style='Trigger.TButton')
+        self.trigger_button.configure(style='Active.TButton')
     
     def disable_trigger_button(self):
         self.trigger_button.configure(style="Inactive.TButton")
@@ -697,8 +697,6 @@ class SettingsFrame(tk.Frame):
             self.button_frame.grid_columnconfigure(i, weight=1)
             self.settings_panes.append(settings_pane)
         
-        if self.settings_panes:
-            self.settings_panes[0].pack(fill="both", expand=True)
 
     def switch_settings_pane(self, index: int):
         for i, pane in enumerate(self.settings_panes):
@@ -739,7 +737,6 @@ class GUI:
         self.frame_viewer_button = ttk.Button(
             self.right_panel, 
             image=frame_viewer_image,
-            style="Active.TButton"  # Всегда активна
         )
         self.frame_viewer_button.image = frame_viewer_image
         self.frame_viewer_button.pack(anchor="center", padx=5, pady=5)

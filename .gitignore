@@ -1,0 +1,4 @@
+src/video_editor.py
+src/__pycache__
+gxipy/__pycache__
+output/*
