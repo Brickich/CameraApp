@@ -1,5 +1,5 @@
 import gxipy as gx
-from PIL import Image, ImageDraw
+from PIL import Image
 from threading import Event
 import json
 
@@ -12,31 +12,29 @@ class PresetManager:
             "trigger" : {},
         }
 
-    def check_existence(self, preset_name):
+    def checkExistence(self, preset_name):
         if preset_name in self.presets:
             return True
         
         raise ValueError(f"Preset : {preset_name} doesn't exist")
 
 
-    def change_preset(self , preset_name , preset_data):
-        if self.check_existence(preset_name):
+    def changePreset(self , preset_name , preset_data):
+        if self.checkExistence(preset_name):
             self.presets[preset_name] = preset_data
 
-    def get_preset(self, preset_name) :
-        if self.check_existence(preset_name):
+    def getPreset(self, preset_name) :
+        if self.checkExistence(preset_name):
             return self.presets[preset_name]
     
-    def add_preset(self , preset_name , preset_data = None):
+    def addPreset(self , preset_name , preset_data = None):
         if preset_data is None:
             preset_data = {}
         self.presets[preset_name] = preset_data
 
-    def save_to_file(self, preset_name , filename):
+    def saveToFile(self, preset_name , filename):
         with open(filename , "w") as f:
             json.dump(self.presets[preset_name], f  , indent=4)
-
-
 
 
 
@@ -46,8 +44,10 @@ class CameraControl:
         self.cams= []
         self.cameras:list[Camera] = []
 
-        self.device_manager = gx.DeviceManager()
-        dev_num, dev_info_list = self.device_manager.update_device_list()
+        self.deviceManager = gx.DeviceManager()
+        dev_num, dev_info_list = self.deviceManager.update_device_list()
+
+
 
         if dev_num == 0:
             print("No available devices")
@@ -55,7 +55,7 @@ class CameraControl:
         else:
             for i in range(dev_num):
                 self.devices.append(dev_info_list[i].get("model_name"))
-                cam = self.device_manager.open_device_by_index(i+1)
+                cam = self.deviceManager.open_device_by_index(i+1)
                 self.cams.append(cam)
 
                 
@@ -70,7 +70,7 @@ class CameraControl:
                 "MER2" if "MER2" in model else
                 "MER" if "MER" in model else
                 model.upper())
-            image_convert = self.device_manager.create_image_format_convert()
+            image_convert = self.deviceManager.create_image_format_convert()
             camera = Camera(cam , type , image_convert , model)
             self.cameras.append(camera)
 
@@ -81,38 +81,41 @@ class Camera:
     def __init__(self ,  cam, type , image_convert , model):
         self.cam = None
         self.type = None
-        self.model = model
-        self.image_convert =  None
-        self.preset_manager = PresetManager()
+        self.Model = model
+        self.imageConvert =  None
+        self.presetManager = PresetManager()
 
-        self.is_recording = False
-        self.is_triggered = False
+        self.isRecording = False
+        self.isTriggered = False
         self.colored = False
-        self.SupportColorFormat = False
-        self.SupportMonoFormat = False
+        self.supportColorFormat = False
+        self.supportMonoFormat = False
 
 
-        self.captured_frames = 0
-        self.QuantityOfFrames = 100
+        self.FramesCaptured = 0
+        self.FramesQuantity = 100
         self.timeout = 12.0
 
-        self.trigger_event = Event()
-        self.capture_event = Event()
-
-        self.crosshair_enabled = False
-        self.flip_h_enabled = False
-        self.flip_v_enabled = False
-        self.image_angle =0 
+        self.crosshairEnabled = False
+        self.flipHorEnabled = False
+        self.flipVerEnabled = False
+        self.imageAngle =0 
 
         self.images:list[Image.Image] =[]
-        self.raw_images:list = []
+        self.rawImages:list = []
         self.timestamps:list[float] = []
+
+        self.settings = ["Width" , "Height" , "OffsetX" , "OffsetY" ,"FrameRate", "ExposureTime" , "Gain" , "TriggerDelay" , "FramesQuantity"]
+
 
 
         
-        self.__init__device(cam , type , image_convert) 
 
-    def __init__device(self , cam , type , image_convert):
+
+        
+        self._initDevice(cam , type , image_convert) 
+
+    def _initDevice(self , cam , type , image_convert):
         try: 
             self.cam = cam
             self.type = type
@@ -146,17 +149,17 @@ class Camera:
                 self.AcquisitionBurstFrameCount = self.FeatureControl.get_int_feature("AcquisitionBurstFrameCount")
                 self.ExposureTimeMode = self.FeatureControl.get_enum_feature("ExposureTimeMode")
 
-            self.PixelFormats = self.FeatureControl.get_enum_feature("PixelFormat").get_range()
+            self.pixelFormats = self.FeatureControl.get_enum_feature("PixelFormat").get_range()
 
-            for pixel_format in self.PixelFormats:
-                if gx.Utility.is_gray(pixel_format['value']):
+            for pixelFormat in self.pixelFormats:
+                if gx.Utility.is_gray(pixelFormat['value']):
                     if not self.colored:
                         self.colored = False
-                    self.SupportMonoFormat = True
+                    self.supportMonoFormat = True
                 else:
                     self.colored = True
-                    self.SupportColorFormat = True
-                    self.SupportMonoFormat = True
+                    self.supportColorFormat = True
+                    self.supportMonoFormat = True
             self.OffsetX.set(0)
             self.OffsetY.set(0)
             
@@ -168,71 +171,62 @@ class Camera:
                 "FrameRate": 24.0,
                 "Gain" : self.Gain.get_range().get("max"),
                 "TriggerDelay" : self.TriggerDelay.get_range().get("min"),
-                "QuantityOfFrames" : self.QuantityOfFrames,
+                "FramesQuantity" : self.FramesQuantity,
                 "OffsetX" : 0 , 
                 "OffsetY" : 0,
             }
 
-            self.preset_manager.change_preset("default" , default_preset)
+            self.presetManager.changePreset("default" , default_preset)
 
             preview_preset = default_preset.copy()
             preview_preset["ExposureTime"] = 40000.0
 
-            self.preset_manager.change_preset("preview" , preview_preset)
+            self.presetManager.changePreset("preview" , preview_preset)
 
             trigger_preset = default_preset.copy()
             trigger_preset['ExposureTime'] = self.ExposureTime.get_range().get("min")
             trigger_preset["FrameRate"] = 1000.0
 
-            self.preset_manager.change_preset("trigger" , trigger_preset)
+            self.presetManager.changePreset("trigger" , trigger_preset)
 
-            self.default_settings()
+            self.defaultSettings()
 
-            print(f'{self.model} {"Colored" if self.colored else "Mono"} Camera')
+            print(f'{self.Model} {"Colored" if self.colored else "Mono"} Camera')
         except Exception as e:
             print(f"{str(e)}")
     
-    def get_raw_image(self) :
-        raw_image = self.cam.data_stream[0].get_image()
-        return raw_image
+    def getRawImage(self) :
+        return self.cam.data_stream[0].get_image()
 
-    def convert_raw_image(self , raw_image):
-        height = raw_image.frame_data.height
-        width = raw_image.frame_data.width
+    def convertRawImage(self , rawImage):
+        height = rawImage.frame_data.height
+        width = rawImage.frame_data.width
         if not self.colored:
-            mono_image_array, mono_image_buffer_length = self.convert_to_special_pixel_format(raw_image, gx.GxPixelFormatEntry.MONO8)
+            mono_image_array, mono_image_buffer_length = self.convert_to_special_pixel_format(rawImage, gx.GxPixelFormatEntry.MONO8)
             if mono_image_array is None:
                 return
             numpy_image = gx.numpy.frombuffer( mono_image_array, dtype=gx.numpy.ubyte, count=mono_image_buffer_length).reshape(height, width)
-            return Image.fromarray(numpy_image, "L")
             
         else:
-            rgb_image_array, rgb_image_buffer_length = self.convert_to_special_pixel_format(raw_image, gx.GxPixelFormatEntry.RGB8)
+            rgb_image_array, rgb_image_buffer_length = self.convert_to_special_pixel_format(rawImage, gx.GxPixelFormatEntry.RGB8)
             if rgb_image_array is None:
                 return None
             numpy_image = gx.numpy.frombuffer(rgb_image_array, dtype=gx.numpy.ubyte, count=rgb_image_buffer_length).reshape(height, width, 3)
-            return Image.fromarray(numpy_image, "RGB")
+        return numpy_image
 
-    def get_image(self) -> tuple[Image.Image] | None:
-        try:
-            raw_image = self.get_raw_image()
-            if raw_image is None:
-                return None
+    def getImage(self , numpyImage) :
+        if not self.colored:
+            return Image.fromarray(numpyImage, "L")
+        else:
+            return Image.fromarray(numpyImage, "RGB")
 
-
-            return self.convert_raw_image(raw_image)
-
-            
-        except Exception as e:
-            return None
-
-    def default_settings(self):
-        self.apply_preset(self.preset_manager.get_preset("default"))
+    def defaultSettings(self):
+        self.applyPreset(self.presetManager.getPreset("default"))
         self.FrameRateMode.set("ON")
         self.TriggerMode.set("OFF")
 
-    def trigger_settings(self , trigger_source:str):
-        self.apply_preset(self.preset_manager.get_preset("trigger"))
+    def triggerSettings(self , triggerSource:str):
+        self.applyPreset(self.presetManager.getPreset("trigger"))
         self.TriggerActivation.set(gx.GxTriggerActivationEntry.FALLINGEDGE)
         self.FrameRateMode.set("ON")
         if self.type != "MER":
@@ -242,18 +236,17 @@ class Camera:
         self.LineMode.set("Input")
         self.TriggerMode.set("ON")
 
-        self.TriggerSource.set(trigger_source)
+        self.TriggerSource.set(triggerSource)
 
 
-    def apply_preset(self, preset):
-
+    def applyPreset(self, preset):
         self.OffsetX.set(0)
         self.OffsetY.set(0)
 
         self.Width.set(preset["Width"])
         self.Height.set(preset["Height"])
 
-        if self.type == "MER2":
+        if self.type != "MER":
             if preset["ExposureTime"] < 20:
                 self.ExposureTimeMode.set("UltraShort")
             else:
@@ -263,49 +256,32 @@ class Camera:
         self.FrameRate.set(preset['FrameRate'])
         self.Gain.set(preset['Gain'])
         self.TriggerDelay.set(preset['TriggerDelay'])
-        self.QuantityOfFrames = preset["QuantityOfFrames"]
+
+        self.FramesQuantity = preset["FramesQuantity"]
         self.OffsetX.set(preset["OffsetX"])
         self.OffsetY.set(preset['OffsetY'])
         
 
-    def save_images(self , dir_path ):
+    def saveImages(self , dir_path ):
         for i, (img, timestamp) in enumerate(zip(self.images, self.timestamps)):
             img.save(f"{dir_path}/Frame{i+1}__T{timestamp} µs.png")
 
-    def image_handling(self) :
-        result = self.get_image()
-        if result is None:
-            return None
-        image = result
-        if not image:
-            return None
-        if self.image_angle!=0:
-            image = image.rotate(self.image_angle)
-        if self.flip_v_enabled:
-            image = image.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
-        if self.flip_h_enabled:
-            image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-
-        if self.crosshair_enabled:
-            image = add_crosshair(image)
-
-        return image
 
     def switch_recording(self):
-        self.is_recording = not self.is_recording
-        if self.is_recording:
+        self.isRecording = not self.isRecording
+        if self.isRecording:
             self.cam.stream_on()
         else:
             self.cam.stream_off()
 
-    def convert_to_special_pixel_format(self, raw_image , pixel_format):
-        self.image_convert.set_dest_format(pixel_format)
-        valid_bits = get_best_valid_bits(raw_image.frame_data.pixel_format)
+    def convert_to_special_pixel_format(self, rawImage , pixelFormat):
+        self.image_convert.set_dest_format(pixelFormat)
+        valid_bits = self.get_best_valid_bits(rawImage.frame_data.pixel_format)
         self.image_convert.set_valid_bits(valid_bits)
-        buffer_out_size = self.image_convert.get_buffer_size_for_conversion(raw_image)
+        buffer_out_size = self.image_convert.get_buffer_size_for_conversion(rawImage)
         output_image_array = (gx.c_byte * buffer_out_size)()
         output_image = gx.addressof(output_image_array)
-        self.image_convert.convert(raw_image, output_image, buffer_out_size, False)
+        self.image_convert.convert(rawImage, output_image, buffer_out_size, False)
         if output_image is None:
             return
         return output_image_array, buffer_out_size
@@ -316,144 +292,124 @@ class Camera:
             "Width = {}\t Height = {}\n" \
             "ExposureTime = {}\tTriggerDelay = {}\tGain = {}\n" \
             "TriggerSource = {}\t Frames = {}\n"
-                  .format(self.model , self.CurrentFrameRate.get() ,
+                  .format(self.Model , self.CurrentFrameRate.get() ,
                         self.Width.get() , self.Height.get() ,
                         self.ExposureTime.get() , self.TriggerDelay.get() ,self.Gain.get(),
-                        self.TriggerSource.get() ,self.QuantityOfFrames ))
+                        self.TriggerSource.get() ,self.FramesQuantity ))
 
     def switch_trigger(self):
-        self.is_triggered = not self.is_triggered
-        print(f'{self.model} {"Triggered" if self.is_triggered else ": Trigger OFF"}\n')
+        self.isTriggered = not self.isTriggered
 
 
-
-
-        
-    def switch_capture(self):
-        self.switch_recording()
-        print(f'{self.model} {'Recording' if self.is_recording else 'OFF'}')
-        if not self.is_recording:
-            self.capture_event.set()
-            return
-        self.capture_event.clear()
 
     def switch_crosshair(self):
-        self.crosshair_enabled = not self.crosshair_enabled
-        print(f"{self.model} Crosshair is {"ON" if self.crosshair_enabled else "OFF"}\n")
+        self.crosshairEnabled = not self.crosshairEnabled
+        print(f"{self.Model} Crosshair is {"ON" if self.crosshairEnabled else "OFF"}\n")
 
     def flip_image_horizontally(self):
-        self.flip_h_enabled = not self.flip_h_enabled
-        print("{} Image flipped HORIZONTALLY".format(self.model))
+        self.flipHorEnabled = not self.flipHorEnabled
+        print("{} Image flipped HORIZONTALLY".format(self.Model))
 
     def flip_image_vertically(self):
-        self.flip_v_enabled = not self.flip_v_enabled
-        print("{} Image flipped VERTICALLY".format(self.model))
+        self.flipVerEnabled = not self.flipVerEnabled
+        print("{} Image flipped VERTICALLY".format(self.Model))
 
     def rotate_image_right(self):
-        self.image_angle -= 90
-        if abs(self.image_angle) == 360:
-            self.image_angle =0
-        print(f"{self.model} Current image angle : {self.image_angle}")
+        self.imageAngle -= 90
+        if abs(self.imageAngle) == 360:
+            self.imageAngle =0
+        print(f"{self.Model} Current image angle : {self.imageAngle}")
 
     def rotate_image_left(self):
-        self.image_angle +=90
-        if abs(self.image_angle) == 360:
-            self.image_angle =0
-        print(f"{self.model} Current image angle : {self.image_angle}")
+        self.imageAngle +=90
+        if abs(self.imageAngle) == 360:
+            self.imageAngle =0
+        print(f"{self.Model} Current image angle : {self.imageAngle}")
 
     def switch_white_balance(self):
         self.cam.BalanceWhiteAuto.set(gx.GxAutoEntry.ONCE)
 
     def close(self):
         if self.cam:
-            print("{} is off".format(self.model))
+            print("{} is off".format(self.Model))
             self.TriggerMode.set("OFF")
             self.cam.close_device()
-
-def add_crosshair(image: Image.Image) -> Image.Image:
-    img = image.copy()
-    draw = ImageDraw.Draw(img)
-    width, height = img.size
-    draw.line(
-        [(0, height / 2), (width, height / 2)], fill="red", width=2
-    )
-    draw.line(
-        [(width / 2, 0), (width / 2, height)], fill="red", width=2
-    )
-    return img
-
-def get_best_valid_bits(pixel_format):
-    valid_bits = gx.DxValidBit.BIT0_7
-    if pixel_format in (
-        gx.GxPixelFormatEntry.MONO8,
-        gx.GxPixelFormatEntry.BAYER_GR8,
-        gx.GxPixelFormatEntry.BAYER_RG8,
-        gx.GxPixelFormatEntry.BAYER_GB8,
-        gx.GxPixelFormatEntry.BAYER_BG8,
-        gx.GxPixelFormatEntry.RGB8,
-        gx.GxPixelFormatEntry.BGR8,
-        gx.GxPixelFormatEntry.R8,
-        gx.GxPixelFormatEntry.B8,
-        gx.GxPixelFormatEntry.G8,
-    ):
+    
+    def get_best_valid_bits(self, pixel_format):
         valid_bits = gx.DxValidBit.BIT0_7
-    elif pixel_format in (
-        gx.GxPixelFormatEntry.MONO10,
-        gx.GxPixelFormatEntry.MONO10_PACKED,
-        gx.GxPixelFormatEntry.MONO10_P,
-        gx.GxPixelFormatEntry.BAYER_GR10,
-        gx.GxPixelFormatEntry.BAYER_RG10,
-        gx.GxPixelFormatEntry.BAYER_GB10,
-        gx.GxPixelFormatEntry.BAYER_BG10,
-        gx.GxPixelFormatEntry.BAYER_GR10_P,
-        gx.GxPixelFormatEntry.BAYER_RG10_P,
-        gx.GxPixelFormatEntry.BAYER_GB10_P,
-        gx.GxPixelFormatEntry.BAYER_BG10_P,
-        gx.GxPixelFormatEntry.BAYER_GR10_PACKED,
-        gx.GxPixelFormatEntry.BAYER_RG10_PACKED,
-        gx.GxPixelFormatEntry.BAYER_GB10_PACKED,
-        gx.GxPixelFormatEntry.BAYER_BG10_PACKED,
-    ):
-        valid_bits = gx.DxValidBit.BIT2_9
-    elif pixel_format in (
-        gx.GxPixelFormatEntry.MONO12,
-        gx.GxPixelFormatEntry.MONO12_PACKED,
-        gx.GxPixelFormatEntry.MONO12_P,
-        gx.GxPixelFormatEntry.BAYER_GR12,
-        gx.GxPixelFormatEntry.BAYER_RG12,
-        gx.GxPixelFormatEntry.BAYER_GB12,
-        gx.GxPixelFormatEntry.BAYER_BG12,
-        gx.GxPixelFormatEntry.BAYER_GR12_P,
-        gx.GxPixelFormatEntry.BAYER_RG12_P,
-        gx.GxPixelFormatEntry.BAYER_GB12_P,
-        gx.GxPixelFormatEntry.BAYER_BG12_P,
-        gx.GxPixelFormatEntry.BAYER_GR12_PACKED,
-        gx.GxPixelFormatEntry.BAYER_RG12_PACKED,
-        gx.GxPixelFormatEntry.BAYER_GB12_PACKED,
-        gx.GxPixelFormatEntry.BAYER_BG12_PACKED,
-    ):
-        valid_bits = gx.DxValidBit.BIT4_11
-    elif pixel_format in (
-        gx.GxPixelFormatEntry.MONO14,
-        gx.GxPixelFormatEntry.MONO14_P,
-        gx.GxPixelFormatEntry.BAYER_GR14,
-        gx.GxPixelFormatEntry.BAYER_RG14,
-        gx.GxPixelFormatEntry.BAYER_GB14,
-        gx.GxPixelFormatEntry.BAYER_BG14,
-        gx.GxPixelFormatEntry.BAYER_GR14_P,
-        gx.GxPixelFormatEntry.BAYER_RG14_P,
-        gx.GxPixelFormatEntry.BAYER_GB14_P,
-        gx.GxPixelFormatEntry.BAYER_BG14_P,
-    ):
-        valid_bits = gx.DxValidBit.BIT6_13
-    elif pixel_format in (
-        gx.GxPixelFormatEntry.MONO16,
-        gx.GxPixelFormatEntry.BAYER_GR16,
-        gx.GxPixelFormatEntry.BAYER_RG16,
-        gx.GxPixelFormatEntry.BAYER_GB16,
-        gx.GxPixelFormatEntry.BAYER_BG16,
-    ):
-        valid_bits = gx.DxValidBit.BIT8_15
-    return valid_bits
+        if pixel_format in (
+            gx.GxPixelFormatEntry.MONO8,
+            gx.GxPixelFormatEntry.BAYER_GR8,
+            gx.GxPixelFormatEntry.BAYER_RG8,
+            gx.GxPixelFormatEntry.BAYER_GB8,
+            gx.GxPixelFormatEntry.BAYER_BG8,
+            gx.GxPixelFormatEntry.RGB8,
+            gx.GxPixelFormatEntry.BGR8,
+            gx.GxPixelFormatEntry.R8,
+            gx.GxPixelFormatEntry.B8,
+            gx.GxPixelFormatEntry.G8,
+        ):
+            valid_bits = gx.DxValidBit.BIT0_7
+        elif pixel_format in (
+            gx.GxPixelFormatEntry.MONO10,
+            gx.GxPixelFormatEntry.MONO10_PACKED,
+            gx.GxPixelFormatEntry.MONO10_P,
+            gx.GxPixelFormatEntry.BAYER_GR10,
+            gx.GxPixelFormatEntry.BAYER_RG10,
+            gx.GxPixelFormatEntry.BAYER_GB10,
+            gx.GxPixelFormatEntry.BAYER_BG10,
+            gx.GxPixelFormatEntry.BAYER_GR10_P,
+            gx.GxPixelFormatEntry.BAYER_RG10_P,
+            gx.GxPixelFormatEntry.BAYER_GB10_P,
+            gx.GxPixelFormatEntry.BAYER_BG10_P,
+            gx.GxPixelFormatEntry.BAYER_GR10_PACKED,
+            gx.GxPixelFormatEntry.BAYER_RG10_PACKED,
+            gx.GxPixelFormatEntry.BAYER_GB10_PACKED,
+            gx.GxPixelFormatEntry.BAYER_BG10_PACKED,
+        ):
+            valid_bits = gx.DxValidBit.BIT2_9
+        elif pixel_format in (
+            gx.GxPixelFormatEntry.MONO12,
+            gx.GxPixelFormatEntry.MONO12_PACKED,
+            gx.GxPixelFormatEntry.MONO12_P,
+            gx.GxPixelFormatEntry.BAYER_GR12,
+            gx.GxPixelFormatEntry.BAYER_RG12,
+            gx.GxPixelFormatEntry.BAYER_GB12,
+            gx.GxPixelFormatEntry.BAYER_BG12,
+            gx.GxPixelFormatEntry.BAYER_GR12_P,
+            gx.GxPixelFormatEntry.BAYER_RG12_P,
+            gx.GxPixelFormatEntry.BAYER_GB12_P,
+            gx.GxPixelFormatEntry.BAYER_BG12_P,
+            gx.GxPixelFormatEntry.BAYER_GR12_PACKED,
+            gx.GxPixelFormatEntry.BAYER_RG12_PACKED,
+            gx.GxPixelFormatEntry.BAYER_GB12_PACKED,
+            gx.GxPixelFormatEntry.BAYER_BG12_PACKED,
+        ):
+            valid_bits = gx.DxValidBit.BIT4_11
+        elif pixel_format in (
+            gx.GxPixelFormatEntry.MONO14,
+            gx.GxPixelFormatEntry.MONO14_P,
+            gx.GxPixelFormatEntry.BAYER_GR14,
+            gx.GxPixelFormatEntry.BAYER_RG14,
+            gx.GxPixelFormatEntry.BAYER_GB14,
+            gx.GxPixelFormatEntry.BAYER_BG14,
+            gx.GxPixelFormatEntry.BAYER_GR14_P,
+            gx.GxPixelFormatEntry.BAYER_RG14_P,
+            gx.GxPixelFormatEntry.BAYER_GB14_P,
+            gx.GxPixelFormatEntry.BAYER_BG14_P,
+        ):
+            valid_bits = gx.DxValidBit.BIT6_13
+        elif pixel_format in (
+            gx.GxPixelFormatEntry.MONO16,
+            gx.GxPixelFormatEntry.BAYER_GR16,
+            gx.GxPixelFormatEntry.BAYER_RG16,
+            gx.GxPixelFormatEntry.BAYER_GB16,
+            gx.GxPixelFormatEntry.BAYER_BG16,
+        ):
+            valid_bits = gx.DxValidBit.BIT8_15
+        return valid_bits
+    
+
+
 
 
