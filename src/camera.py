@@ -81,7 +81,7 @@ class Camera:
     def __init__(self ,  cam, type , image_convert , model):
         self.cam = None
         self.type = None
-        self.Model = model
+        self.model = model
         self.imageConvert =  None
         self.presetManager = PresetManager()
 
@@ -189,9 +189,8 @@ class Camera:
 
             self.presetManager.changePreset("trigger" , trigger_preset)
 
+            self.applyPreset(default_preset)
             self.defaultSettings()
-
-            print(f'{self.Model} {"Colored" if self.colored else "Mono"} Camera')
         except Exception as e:
             print(f"{str(e)}")
     
@@ -221,11 +220,13 @@ class Camera:
             return Image.fromarray(numpyImage, "RGB")
 
     def defaultSettings(self):
-        self.applyPreset(self.presetManager.getPreset("default"))
+        defaultPreset = self.presetManager.getPreset("default")
+        self.FrameRate.set(defaultPreset["FrameRate"])
+
         self.FrameRateMode.set("ON")
         self.TriggerMode.set("OFF")
 
-    def triggerSettings(self , triggerSource:str):
+    def triggerSettings(self, triggerSource:str ):
         self.applyPreset(self.presetManager.getPreset("trigger"))
         self.TriggerActivation.set(gx.GxTriggerActivationEntry.FALLINGEDGE)
         self.FrameRateMode.set("ON")
@@ -233,10 +234,10 @@ class Camera:
             self.TriggerSelector.set(gx.GxTriggerSelectorEntry.FRAME_BURST_START)
             self.AcquisitionBurstFrameCount.set(self.AcquisitionBurstFrameCount.get_range().get("max"))
 
-        self.LineMode.set("Input")
+        # self.LineMode.set("Input")
         self.TriggerMode.set("ON")
-
         self.TriggerSource.set(triggerSource)
+
 
 
     def applyPreset(self, preset):
@@ -261,18 +262,17 @@ class Camera:
         self.OffsetX.set(preset["OffsetX"])
         self.OffsetY.set(preset['OffsetY'])
         
+    def previewMode(self):
+        self.ExposureTime.set(float(40000))
+
+    def triggerMode(self):
+        self.ExposureTime.set(self.presetManager.getPreset("default").get("ExposureTime"))  
 
     def saveImages(self , dir_path ):
         for i, (img, timestamp) in enumerate(zip(self.images, self.timestamps)):
             img.save(f"{dir_path}/Frame{i+1}__T{timestamp} µs.png")
 
 
-    def switch_recording(self):
-        self.isRecording = not self.isRecording
-        if self.isRecording:
-            self.cam.stream_on()
-        else:
-            self.cam.stream_off()
 
     def convert_to_special_pixel_format(self, rawImage , pixelFormat):
         self.image_convert.set_dest_format(pixelFormat)
@@ -286,52 +286,45 @@ class Camera:
             return
         return output_image_array, buffer_out_size
 
-    def print_settings(self):
-        if self.cam:
-            print("{} : FrameRate = {}\n" \
-            "Width = {}\t Height = {}\n" \
-            "ExposureTime = {}\tTriggerDelay = {}\tGain = {}\n" \
-            "TriggerSource = {}\t Frames = {}\n"
-                  .format(self.Model , self.CurrentFrameRate.get() ,
-                        self.Width.get() , self.Height.get() ,
-                        self.ExposureTime.get() , self.TriggerDelay.get() ,self.Gain.get(),
-                        self.TriggerSource.get() ,self.FramesQuantity ))
+    def __str__(self):
+        return (
+            f"{self.model}\n"
+            f"Width:{self.Width.get()}\tHeight:{self.Height.get()}\tOffsetX:{self.OffsetX.get()}\tOffsetY:{self.OffsetY.get()}\n"
+            f"FrameRate:{self.CurrentFrameRate.get()}\tFrames:{self.FramesQuantity}\tExposureTime:{self.ExposureTime.get()}\n"
+            f"TriggerSource:{self.TriggerSource.get()}\tTriggerDelay:{self.TriggerDelay.get()}"
+        )
 
-    def switch_trigger(self):
-        self.isTriggered = not self.isTriggered
-
-
-
+        
     def switch_crosshair(self):
         self.crosshairEnabled = not self.crosshairEnabled
-        print(f"{self.Model} Crosshair is {"ON" if self.crosshairEnabled else "OFF"}\n")
+        print(f"{self.model} Crosshair is {"ON" if self.crosshairEnabled else "OFF"}\n")
 
     def flip_image_horizontally(self):
         self.flipHorEnabled = not self.flipHorEnabled
-        print("{} Image flipped HORIZONTALLY".format(self.Model))
+        print("{} Image flipped HORIZONTALLY".format(self.model))
 
     def flip_image_vertically(self):
         self.flipVerEnabled = not self.flipVerEnabled
-        print("{} Image flipped VERTICALLY".format(self.Model))
+        print("{} Image flipped VERTICALLY".format(self.model))
 
     def rotate_image_right(self):
         self.imageAngle -= 90
         if abs(self.imageAngle) == 360:
             self.imageAngle =0
-        print(f"{self.Model} Current image angle : {self.imageAngle}")
+        print(f"{self.model} Current image angle : {self.imageAngle}")
 
     def rotate_image_left(self):
         self.imageAngle +=90
         if abs(self.imageAngle) == 360:
             self.imageAngle =0
-        print(f"{self.Model} Current image angle : {self.imageAngle}")
+        print(f"{self.model} Current image angle : {self.imageAngle}")
 
     def switch_white_balance(self):
         self.cam.BalanceWhiteAuto.set(gx.GxAutoEntry.ONCE)
 
     def close(self):
         if self.cam:
-            print("{} is off".format(self.Model))
+            print("{} is off".format(self.model))
             self.TriggerMode.set("OFF")
             self.cam.close_device()
     

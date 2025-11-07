@@ -192,7 +192,7 @@ class CameraSettingsFrame(QWidget):
                 if step == 0:
                     step = 1
                 slider.setSingleStep(step)
-
+                
                 self.settingsSlidersDict[setting] = {slider: dataType}
                 slider.setValue(value)
                 slider.valueChanged.connect(lambda val, ent=entry: self._onSliderChange(val, ent))
@@ -447,7 +447,6 @@ class TriggerWorker(QThread):
         self.cameraIndex = cameraIndex
         self.dir = f"output/Camera{cameraIndex+1}"
         self.triggerSource = "Software"
-        self.is_running = False
 
     def run(self):
         
@@ -501,8 +500,6 @@ class TriggerWorker(QThread):
 
     def _cleanup(self):
         try:
-            if self.camera.isRecording:
-                self.camera.switch_recording()
             
             self.camera.defaultSettings()
             self.camera.FramesCaptured = 0
@@ -516,21 +513,20 @@ class TriggerWorker(QThread):
             if self.isRunning():
                 print(f"Camera {self.cameraIndex+1} thread is already running!")
                 return False
-            self.camera.switch_trigger()
+            self.camera.isTriggered = True
             
             self.camera.rawImages.clear()
             self.camera.images.clear()
             self.camera.timestamps.clear()
             self.camera.FramesCaptured = 0
 
-            if self.camera.isRecording:
-                self.camera.switch_recording()
+            self.camera.cam.stream_off()
 
             self.camera.triggerSettings(self.triggerSource)
 
-            self.camera.switch_recording()
+            self.camera.cam.stream_on()
 
-            self.camera.print_settings()
+            print(self.camera)
 
             print(f"Camera {self.cameraIndex+1} Trigger Started")
             self.start()
@@ -544,7 +540,8 @@ class TriggerWorker(QThread):
             return
             
         print(f"Stopping camera {self.cameraIndex+1} trigger...")
-        self.camera.switch_trigger()
+        self.camera.isTriggered = False
+        self.camera.defaultSettings()
 
         self.wait()
         
@@ -578,6 +575,8 @@ class ImageWorker(QThread):
         self.is_running = True
         
     def run(self):
+        self.camera.cam.stream_on()
+        self.is_running = True
         while self.is_running:
             try:
                 rawImage = self.camera.getRawImage()
@@ -602,7 +601,7 @@ class ImageWorker(QThread):
     def stop(self):
         self.is_running = False
         self.wait()
-        self.is_running = True
+
 
     def numpyToPixmap(self, numpyImage):
         try:
@@ -811,6 +810,7 @@ class MainWindow(QMainWindow):
             self.imageWorkers.append(imageWorker)
 
             triggerWorker = TriggerWorker(camera, i )
+            triggerWorker.workerEnd.connect(lambda success, idx=i: self._onTriggerWorkerFinished(success, idx))
             self.triggerWorkers.append(triggerWorker)
             
             settings_frame = self.settingsWindow.cameraSettingsFrames[i]
@@ -819,12 +819,13 @@ class MainWindow(QMainWindow):
             settings_frame.triggerButton.clicked.connect(lambda checked , idx = i : self._toggleCameraTrigger(checked , idx))
             settings_frame.triggerSourceChanged.connect(triggerWorker._onTriggerSourceChange)
             settings_frame.captureModeButtonGroup.buttonClicked.connect(lambda btn , idx = i : self._toggleCaptureMode(btn , idx))
-            triggerWorker.workerEnd.connect(lambda success, idx=i: self._onTriggerWorkerFinished(success, idx))
 
     def _toggleCameraTrigger(self, checked, index: int):
         try:
             triggerWorker = self.triggerWorkers[index]
             if checked:
+                settingsFrame = self.settingsWindow.cameraSettingsFrames[index]
+                settingsFrame.captureModeButtonGroup.button(1).setChecked(True)
                 success = triggerWorker.startTrigger()
                 if not success:
                     self.settingsWindow.cameraSettingsFrames[index].triggerButton.setChecked(False)
@@ -849,15 +850,10 @@ class MainWindow(QMainWindow):
 
     def _toggleCaptureMode(self , button:QPushButton , camerIndex:int ):
         def switchMode(camera:Camera , mode:str):
-            wasRecording = camera.isRecording
-            if wasRecording:
-                self._toggleCameraRecording(False , camerIndex)
             if mode == "preview":
-                camera.applyPreset(camera.presetManager.getPreset("preview"))
+                camera.previewMode()
             elif mode =="trigger":
-                camera.applyPreset(camera.presetManager.getPreset("default"))
-            if wasRecording:
-                self._toggleCameraRecording(True , camerIndex)
+                camera.triggerMode()
             
         settingsFrame = self.settingsWindow.cameraSettingsFrames[camerIndex]
         camera = self.cameraControl.cameras[camerIndex]
@@ -870,16 +866,12 @@ class MainWindow(QMainWindow):
 
     def _toggleCameraRecording(self, checked: bool, cameraIndex: int):
         try:
-            camera = self.cameraControl.cameras[cameraIndex]
-            camera.switch_recording()
             worker = self.imageWorkers[cameraIndex]
-            if checked:
-                if not worker.isRunning():
-                    worker.start()
+            if checked and not worker.isRunning():
+                worker.start()
                 print(f"Camera {cameraIndex + 1} recording")
-            else:
-                if worker.isRunning():
-                    worker.stop()
+            elif not checked and worker.isRunning():
+                worker.stop()
                 print(f"Camera {cameraIndex + 1} stopped")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to toggle camera capture: {str(e)}")
@@ -900,18 +892,14 @@ class MainWindow(QMainWindow):
             camera.presetManager.changePreset("default", defaultPreset)
             camera.presetManager.changePreset("preview", previewPreset)
             camera.presetManager.changePreset("trigger", triggerPreset)
-
-            wasRecording = camera.isRecording
-
-            if wasRecording:
-                self._toggleCameraRecording(False, cameraIndex)
-
             print(f"Applying preset for camera {cameraIndex + 1}: {triggerPreset}")
-            
+
+            camera.cam.stream_off()
             camera.applyPreset(triggerPreset)
+            camera.cam.stream_on()
+
             fpsLabel.setText(str(camera.CurrentFrameRate.get()))
-            if wasRecording:
-                self._toggleCameraRecording(True, cameraIndex)
+            
             settingsPane.captureModeButtonGroup.button(1).setChecked(True)
             QMessageBox.information(self, "Success", "Settings applied successfully!")
             
@@ -928,6 +916,12 @@ class MainWindow(QMainWindow):
             if worker and worker.isRunning():
                 worker.stop()
                 worker.wait()
+        for triggerWorker in self.triggerWorkers:
+            if triggerWorker and triggerWorker.isRunning():
+                triggerWorker.stop()
+                triggerWorker.wait()
+        for camera in self.cameraControl.cameras:
+            camera.close()
         event.accept()
 
 
@@ -1090,7 +1084,7 @@ class FrameViewer(QWidget):
                 child.widget().setParent(None)
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_Left:
+        if event.key() == Qt.Key.Key_Left: 
             self._prevButton()
             event.accept()
         elif event.key() == Qt.Key.Key_Right:
@@ -1101,6 +1095,16 @@ class FrameViewer(QWidget):
             event.accept()
         else:
             super().keyPressEvent(event)
+
+    def _prevButton(self,):
+        pass
+
+    def _nextButton(self,) :
+        pass
+
+    def _toggleVideo(self):
+        pass
+
 
 app = QApplication(sys.argv)
 window = MainWindow()
