@@ -93,7 +93,7 @@ class Camera:
 
 
         self.FramesCaptured = 0
-        self.FramesQuantity = 100
+        self.FramesQuantity = 10
         self.timeout = 12.0
 
         self.crosshairEnabled = False
@@ -104,6 +104,7 @@ class Camera:
         self.images:list[Image.Image] =[]
         self.rawImages:list = []
         self.timestamps:list[float] = []
+        self.numpyImages:list = []
 
         self.settings = ["Width" , "Height" , "OffsetX" , "OffsetY" ,"FrameRate", "ExposureTime" , "Gain" , "TriggerDelay" , "FramesQuantity"]
 
@@ -184,8 +185,6 @@ class Camera:
             self.presetManager.changePreset("preview" , preview_preset)
 
             trigger_preset = default_preset.copy()
-            trigger_preset['ExposureTime'] = self.ExposureTime.get_range().get("min")
-            trigger_preset["FrameRate"] = 1000.0
 
             self.presetManager.changePreset("trigger" , trigger_preset)
 

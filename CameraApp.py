@@ -1,9 +1,12 @@
 import sys
 import os
 from src.camera import CameraControl, Camera
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer  
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer  ,QDateTime
 from PyQt6.QtGui import QIntValidator, QPixmap, QImage, QIcon , QPen , QPainter , QColor , QTransform 
 from threading import Thread
+from enum import Enum
+import numpy as np
+import cv2
 from PyQt6.QtWidgets import (
     QFrame,
     QApplication,
@@ -19,8 +22,10 @@ from PyQt6.QtWidgets import (
     QStackedWidget,
     QComboBox,
     QMessageBox,
+    QGroupBox,
     QSizePolicy,
-    QScrollArea
+    QScrollArea,
+    QFileDialog,
 )
 
 class CameraSettingsFrame(QWidget):
@@ -439,7 +444,7 @@ class SettingsWindow(QWidget):
                     button.setChecked(False)
 
 class TriggerWorker(QThread):
-    workerEnd = pyqtSignal(bool)
+    workerEnd = pyqtSignal()
     
     def __init__(self, camera: Camera, cameraIndex: int):
         super().__init__()
@@ -469,13 +474,12 @@ class TriggerWorker(QThread):
                     
                 self.camera.FramesCaptured += 1
 
-            if len(self.camera.rawImages) > 10:
+            if len(self.camera.rawImages) >= 10:
                 self._process_images()
                 
         except Exception as e:
             print(f"Error in trigger worker {self.cameraIndex}: {e}")
         finally:
-            self._cleanup()
             self.stopTrigger()
 
 
@@ -486,7 +490,10 @@ class TriggerWorker(QThread):
                     self.camera.timestamps.append(int(rawImage.get_timestamp() - self.camera.timestamps[0]) / 1000)
                 else:
                     self.camera.timestamps.append(rawImage.get_timestamp())
-                self.camera.images.append(self.camera.getImage(self.camera.convertRawImage(rawImage)))
+                numpyImage = self.camera.convertRawImage(rawImage)
+                self.camera.numpyImages.append(numpyImage)
+
+                self.camera.images.append(self.camera.getImage(numpyImage))
             
             if self.camera.timestamps:
                 self.camera.timestamps[0] = 0.0
@@ -498,16 +505,8 @@ class TriggerWorker(QThread):
         except Exception as e:
             print(f"Error processing images: {e}")
 
-    def _cleanup(self):
-        try:
-            
-            self.camera.defaultSettings()
-            self.camera.FramesCaptured = 0
-            
-            self.workerEnd.emit(True)
-        except Exception as e:
-            self.workerEnd.emit(False)
 
+    
     def startTrigger(self):
         try:
             if self.isRunning():
@@ -532,20 +531,18 @@ class TriggerWorker(QThread):
             self.start()
         except Exception as e:
             print(f"Error starting trigger: {e}")
-            return False
-        return True
 
     def stopTrigger(self):
         if not self.camera.isTriggered:
             return
-            
-        print(f"Stopping camera {self.cameraIndex+1} trigger...")
         self.camera.isTriggered = False
+        print(f"Stopping camera {self.cameraIndex+1} trigger...")
         self.camera.defaultSettings()
-
-        self.wait()
+        self.camera.FramesCaptured = 0
         
         print(f"Camera {self.cameraIndex+1} trigger stopped")
+        self.workerEnd.emit()
+        self.wait()
 
     def _onTriggerSourceChange(self, triggerSource: str):
         self.triggerSource = triggerSource
@@ -775,10 +772,11 @@ class MainWindow(QMainWindow):
 
         self.stackedWidget = QStackedWidget()
         mainWidget = QWidget()
-        frameViewerWidget = FrameViewer(len(self.cameraControl.cameras))
+        self.frameViewer = FrameViewer(len(self.cameraControl.cameras))
+        self.frameViewer.cameraAppButton.clicked.connect(self._showCameraApp)
 
         self.stackedWidget.addWidget(mainWidget)
-        self.stackedWidget.addWidget(frameViewerWidget)
+        self.stackedWidget.addWidget(self.frameViewer)
 
         layout = QHBoxLayout(mainWidget)
 
@@ -810,7 +808,7 @@ class MainWindow(QMainWindow):
             self.imageWorkers.append(imageWorker)
 
             triggerWorker = TriggerWorker(camera, i )
-            triggerWorker.workerEnd.connect(lambda success, idx=i: self._onTriggerWorkerFinished(success, idx))
+            triggerWorker.workerEnd.connect(lambda idx=i: self._onTriggerWorkerFinished(idx))
             self.triggerWorkers.append(triggerWorker)
             
             settings_frame = self.settingsWindow.cameraSettingsFrames[i]
@@ -820,33 +818,47 @@ class MainWindow(QMainWindow):
             settings_frame.triggerSourceChanged.connect(triggerWorker._onTriggerSourceChange)
             settings_frame.captureModeButtonGroup.buttonClicked.connect(lambda btn , idx = i : self._toggleCaptureMode(btn , idx))
 
-    def _toggleCameraTrigger(self, checked, index: int):
+    def startCameraTrigger(self, cameraIndex:int):
+        triggerWorker = self.triggerWorkers[cameraIndex]
+        imageWorker = self.imageWorkers[cameraIndex]
+        imageWorker.stop()
+        settingsFrame = self.settingsWindow.cameraSettingsFrames[cameraIndex]
+        settingsFrame.captureModeButtonGroup.button(1).setChecked(True)
+        success = triggerWorker.startTrigger()
+        if not success:
+            self.settingsWindow.cameraSettingsFrames[cameraIndex].triggerButton.setChecked(False)
+
+    def _toggleCameraTrigger(self, checked, cameraIndex: int):
         try:
-            triggerWorker = self.triggerWorkers[index]
+            triggerWorker = self.triggerWorkers[cameraIndex]
             if checked:
-                settingsFrame = self.settingsWindow.cameraSettingsFrames[index]
+                imageWorker = self.imageWorkers[cameraIndex]
+                imageWorker.stop()
+                settingsFrame = self.settingsWindow.cameraSettingsFrames[cameraIndex]
                 settingsFrame.captureModeButtonGroup.button(1).setChecked(True)
-                success = triggerWorker.startTrigger()
-                if not success:
-                    self.settingsWindow.cameraSettingsFrames[index].triggerButton.setChecked(False)
+                triggerWorker.startTrigger()
             else:
                 triggerWorker.stopTrigger()
         except Exception as e:
-            self.settingsWindow.cameraSettingsFrames[index].triggerButton.setChecked(False)
+            self.settingsWindow.cameraSettingsFrames[cameraIndex].triggerButton.setChecked(False)
 
     def _onImageReady(self, cameraIndex: int, pixmap: QPixmap):
         self.imageLayout.updateImage(cameraIndex, pixmap)
 
-    def _onTriggerWorkerFinished(self, success: bool, cameraIndex: int):
-        QTimer.singleShot(0, lambda: self._update_trigger_ui(cameraIndex, success))
+    def _onTriggerWorkerFinished(self,  cameraIndex: int):
+        images = self.cameraControl.cameras[cameraIndex].numpyImages
+        timestamps = self.cameraControl.cameras[cameraIndex].timestamps
+        self.frameViewer.load_camera_data(cameraIndex , images , timestamps)
+        QTimer.singleShot(0, lambda: self._update_trigger_ui(cameraIndex))
 
 
-    def _update_trigger_ui(self, cameraIndex: int, success: bool):
+    def _update_trigger_ui(self, cameraIndex: int):
         settings_frame = self.settingsWindow.cameraSettingsFrames[cameraIndex]
         settings_frame.triggerButton.setChecked(False)
         
-        if success and settings_frame.playButton.isChecked():
-            self._toggleCameraRecording(True, cameraIndex)
+        if settings_frame.playButton.isChecked():
+            self._toggleCameraRecording(True , cameraIndex)
+
 
     def _toggleCaptureMode(self , button:QPushButton , camerIndex:int ):
         def switchMode(camera:Camera , mode:str):
@@ -908,7 +920,12 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to apply settings: {str(e)}")
             self.settingsWindow.cameraSettingsFrames[cameraIndex].playButton.click()
 
+    def _showCameraApp(self):
+        self.stackedWidget.widget(0).setFocus()
+        self.stackedWidget.setCurrentIndex(0)
+
     def _showFrameViewer(self):
+        self.stackedWidget.widget(1).setFocus()
         self.stackedWidget.setCurrentIndex(1)
 
     def closeEvent(self, event):
@@ -925,27 +942,126 @@ class MainWindow(QMainWindow):
         event.accept()
 
 
-class FrameViewer(QWidget):
-    def __init__(self, camerasAmount: int):
-        super().__init__()
-        self.camerasAmount = camerasAmount
-        self.cameraAttributes = []
-        self.cameraSelectedIndex = -1
-        self.currentFrameIndex = 0
-        self.isPlaying = False
-        self.playDirection = 1 
-        self.frameWidgets = []
+class VideoDirection(Enum):
+    forward = 1
+    backward = -1
 
-        self.setStyleSheet("""QPushButton {
-                                font-size : 14px;
-                                border : 1px solid;
-                                font-family : monospace;
-                           }
-                           QPushButton:checked {
-                                border: 2px solid green;
-                                background-color: #e0ffe0;
+class FrameWorker(QThread):
+    frame_ready = pyqtSignal(int, QPixmap, str) 
+    
+    def __init__(self, camera_index, cam_attributes):
+        super().__init__()
+        self.camera_index = camera_index
+        self.cam_attributes = cam_attributes
+        self.is_running = False
+        self.video_direction = VideoDirection.forward
+        self.current_index = 0
+        self.target_fps = 10
+        self.frame_delay_ms = 1000 // self.target_fps
+        self.last_frame_time = 0
+
+    def run(self):
+        self.is_running = True
+        while self.is_running:
+            if not self.cam_attributes or not self.cam_attributes["images"]:
+                self.msleep(16)  
+                continue
                 
-                            }""")
+            current_time = QDateTime.currentMSecsSinceEpoch()
+            if current_time - self.last_frame_time < self.frame_delay_ms:
+                self.msleep(1)  
+                continue
+                
+            self.last_frame_time = current_time
+            self._process_frame()
+
+    def _process_frame(self):
+        images = self.cam_attributes["images"]
+        timestamps = self.cam_attributes["timestamps"]
+        
+        if not images or self.current_index >= len(images):
+            return
+            
+        if self.video_direction == VideoDirection.forward:
+            self.current_index = (self.current_index + 1) % len(images)
+        else:
+            self.current_index = (self.current_index - 1) % len(images)
+        
+        frame = images[self.current_index]
+        timestamp = timestamps[self.current_index]
+        
+        pixmap = self._numpy_to_pixmap(frame)
+        if pixmap:
+            scaled_pixmap = self._get_scaled_pixmap(pixmap)
+            info_text = f"Frame: {self.current_index}\nTime: {timestamp}"
+            self.frame_ready.emit(self.camera_index, scaled_pixmap, info_text)
+
+    def _numpy_to_pixmap(self, numpy_image):
+        if numpy_image is None:
+            return None
+            
+        try:
+            if numpy_image is None:
+                return None
+                
+            if numpy_image.ndim == 2:
+                height, width = numpy_image.shape
+                bytes_per_line = width
+                q_image = QImage(numpy_image.data, width, height, bytes_per_line, QImage.Format.Format_Grayscale8)
+            elif numpy_image.ndim == 3 and numpy_image.shape[2] == 3:
+                height, width, channels = numpy_image.shape
+                bytes_per_line = 3 * width
+                q_image = QImage(numpy_image.data, width, height, bytes_per_line, QImage.Format.Format_RGB888)
+            
+            return QPixmap.fromImage(q_image)
+            
+        except Exception as e:
+            print(f"Error converting numpy to pixmap: {e}")
+            return None
+
+    def _get_scaled_pixmap(self, pixmap):
+        label_size = self.cam_attributes["imageLabel"].size()
+        if (hasattr(self, '_cached_size') and 
+            hasattr(self, '_cached_pixmap') and
+            self._cached_size == label_size and
+            self._cached_pixmap is not None):
+            return self._cached_pixmap
+            
+        scaled_pixmap = pixmap.scaled(
+            label_size, 
+            Qt.AspectRatioMode.KeepAspectRatio, 
+            Qt.TransformationMode.SmoothTransformation
+        )
+        self._cached_size = label_size
+        self._cached_pixmap = scaled_pixmap
+        return scaled_pixmap
+
+    def change_video_direction(self, direction: VideoDirection):
+        self.video_direction = direction
+
+    def set_fps(self, fps):
+        self.target_fps = max(1, min(30, fps))  
+        self.frame_delay_ms = 1000 // self.target_fps
+
+    def stop(self):
+        self.is_running = False
+        self.wait(500) 
+
+
+class FrameViewer(QWidget):
+    def __init__(self, cameras_amount: int):
+        super().__init__()
+        self.cameras_amount = cameras_amount
+        self.camera_attributes = []
+        self.frame_workers = []
+        self.camera_selected_index = -2 
+        self.is_playing = False
+        
+        self._setupStyles()
+        self._setupUi()
+        self._setup_workers()
+
+    def _setupStyles(self):
         self.colors = {
             'primary': '#4361ee',
             'secondary': '#3a0ca3', 
@@ -956,155 +1072,518 @@ class FrameViewer(QWidget):
             'text_primary': '#212529',
             'border': '#dee2e6'
         }
+        
+        self.setStyleSheet(f"""
+            QPushButton {{
+                font-size: 14px;
+                border: 1px solid {self.colors['border']};
+                font-family: monospace;
+                padding: 8px 12px;
+                border-radius: 5px;
+                background-color: {self.colors['background']};
+            }}
+            QPushButton:checked {{
+                border: 2px solid {self.colors['primary']};
+                background-color: #e0ffe0;
+            }}
+            QPushButton:hover {{
+                background-color: {self.colors['surface']};
+            }}
+            QSlider::groove:horizontal {{
+                border: 1px solid {self.colors['border']};
+                height: 8px;
+                background: {self.colors['surface']};
+                border-radius: 4px;
+            }}
+            QSlider::handle:horizontal {{
+                background: {self.colors['primary']};
+                border: 1px solid {self.colors['border']};
+                width: 18px;
+                margin: -2px 0;
+                border-radius: 9px;
+            }}
+        """)
 
-        mainLayout = QHBoxLayout(self)
-        mainLayout.setContentsMargins(10, 10, 10, 10)
+    def _setupUi(self):
+        main_layout = QHBoxLayout(self)
+        main_layout.setContentsMargins(10, 10, 10, 10)
 
-        self.leftWidget = QWidget()
-        leftLayout = QVBoxLayout(self.leftWidget)
-        mainLayout.addWidget(self.leftWidget)
+        self.left_widget = QWidget()
+        left_layout = QVBoxLayout(self.left_widget)
+        main_layout.addWidget(self.left_widget)
 
-        self.rightWidget = QWidget()
-        self.rightWidget.setFixedWidth(300)
-        self.rightWidget.setStyleSheet(f"""
+        self.right_widget = QWidget()
+        self.right_widget.setFixedWidth(300)
+        self.right_widget.setStyleSheet(f"""
             QWidget {{
                 background-color: {self.colors['surface']};
                 border-radius: 10px;
-                padding: 10px;
+                padding: 15px;
             }}
         """)
-        mainLayout.addWidget(self.rightWidget)
-        self.stackedWidget = QStackedWidget()
-        leftLayout.addWidget(self.stackedWidget)
+        main_layout.addWidget(self.right_widget)
+        self.stacked_widget = QStackedWidget()
+        left_layout.addWidget(self.stacked_widget)
 
-        self.allFramesWidget = QWidget()
-        self.allFramesLayout = QVBoxLayout(self.allFramesWidget)
-        self.allFramesLayout.setSpacing(15)
-        self.allFramesLayout.setContentsMargins(10, 10, 10, 10)
-        
-        
-        self.singleFrameWidget = QWidget()
-        self.singleFrameLayout = QVBoxLayout(self.singleFrameWidget)
-        self.singleFrameLayout.setContentsMargins(20, 20, 20, 20)
+        self.all_frames_widget = QWidget()
+        self.all_frames_layout = QVBoxLayout(self.all_frames_widget)
+        self.all_frames_layout.setContentsMargins(10, 10, 10, 10)
 
-        self.stackedWidget.addWidget(self.allFramesWidget)
-        self.stackedWidget.addWidget(self.singleFrameWidget)
-        self.stackedWidget.setCurrentIndex(0)
+        self.single_frame_widget = QWidget()
+        self.single_frame_layout = QVBoxLayout(self.single_frame_widget)
+        self.single_frame_layout.setContentsMargins(10,10,10,10)
+
+        self.stacked_widget.addWidget(self.all_frames_widget)
+        self.stacked_widget.addWidget(self.single_frame_widget)
+        self.stacked_widget.setCurrentIndex(0)
 
         self._initViewLayout()
         self._initControlLayout()
 
     def _initViewLayout(self):
-        for i in range(self.camerasAmount):
-            frameWidget = QWidget()
-            frameLayout = QVBoxLayout(frameWidget)
-            frameLayout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            cameraLabel = QLabel(f"Camera {i+1}")
-            cameraLabel.setFixedHeight(30)
+        self.frame_widgets = []
 
-            imageLabel = QLabel()
+        for i in range(self.cameras_amount):
+            frame_widget = QWidget()
+            
+            frame_layout = QVBoxLayout(frame_widget)
+            frame_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            
+            camera_label = QLabel(f"Camera {i+1}")
+            camera_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            camera_label.setFixedHeight(25)
+            camera_label.setStyleSheet(f"font-weight: bold; color: {self.colors['text_primary']};")
 
-            infoLabel = QLabel("Frame : None\nTime : None")
-            infoLabel.setFixedHeight(30)
+            image_label = QLabel()
+            image_label.setPixmap(QPixmap("assets/no_image.png"))
+            image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            image_label.setMinimumSize(320, 240)
+            image_label.setSizePolicy(QSizePolicy.Policy.Expanding , QSizePolicy.Policy.Expanding)
+            image_label.setStyleSheet(f"border: 1px solid {self.colors['border']}; background-color: black;")
 
-            frameLayout.addWidget(cameraLabel)
-            frameLayout.addWidget(imageLabel)
-            frameLayout.addWidget(infoLabel)
-            self.allFramesLayout.addWidget(frameWidget)
+            info_label = QLabel("Frame: None\nTime: None")
+            info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            info_label.setFixedHeight(40)
+            info_label.setStyleSheet(f"color: {self.colors['text_primary']};")
 
-            self.frameWidgets.append(frameWidget)
+            frame_layout.addWidget(camera_label)
+            frame_layout.addWidget(image_label)
+            frame_layout.addWidget(info_label)
 
-            self.cameraAttributes.append({
-                "imageLabel" : imageLabel,
-                "infoLabel" : infoLabel,
-                "images" : [],
-                "timestamps" : [],
-                "currentIndex" : 0,
+            self.all_frames_layout.addWidget(frame_widget)
+            self.frame_widgets.append(frame_widget)
+
+            self.camera_attributes.append({
+                "imageLabel": image_label,
+                "infoLabel": info_label,
+                "images": [],
+                "timestamps": [],
+                "currentIndex": 0,
             })
 
+    def _setup_workers(self):
+        for i in range(self.cameras_amount):
+            worker = FrameWorker(i, self.camera_attributes[i])
+            worker.frame_ready.connect(self._on_frame_ready)
+            self.frame_workers.append(worker)
+
     def _initControlLayout(self):
-        mainControlLayout = QVBoxLayout(self.rightWidget)
-        cameraSelectionLayout = QVBoxLayout()
-        cameraSelectionLayout.setAlignment(Qt.AlignmentFlag.AlignJustify)
-        allCamerasSelectedButton = QPushButton("All cameras")
-        allCamerasSelectedButton.setCheckable(True)
-        allCamerasSelectedButton.setChecked(True)
-        cameraSelectionLayout.addWidget(allCamerasSelectedButton)
+        main_control_layout = QVBoxLayout(self.right_widget)
+        main_control_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        main_control_layout.setSpacing(15)
 
-        self.cameraSelectionButtonGroup = QButtonGroup()
-        self.cameraSelectionButtonGroup.setExclusive(True)
-        self.cameraSelectionButtonGroup.addButton(allCamerasSelectedButton)
-        mainControlLayout.addLayout(cameraSelectionLayout)
-
-        navLayout = QVBoxLayout(self.rightWidget)
-
-        navFrameLayout = QHBoxLayout()
-        mainControlLayout.addLayout(navLayout)
-        navLayout.addLayout(navFrameLayout)
-
-        self.prevButton = QPushButton("◄")
-        self.prevButton.setEnabled(True)
-        self.nextButton = QPushButton("►")
-        self.nextButton.setEnabled(True)
-
-        navFrameLayout.addWidget(self.prevButton)
-        navFrameLayout.addWidget(self.nextButton)
-
-
-        navVideoLayout = QHBoxLayout()
-        navLayout.addLayout(navVideoLayout)
+        camera_group = QGroupBox("Camera Selection")
+        camera_group.setAlignment(Qt.AlignmentFlag.AlignTop)
+        camera_layout = QVBoxLayout(camera_group)
         
+        self.camera_selection_group = QButtonGroup()
+        self.camera_selection_group.setExclusive(True)
+
+        all_cameras_btn = QPushButton("All Cameras")
+        all_cameras_btn.setCheckable(True)
+        all_cameras_btn.setChecked(True)
+        self.camera_selection_group.addButton(all_cameras_btn, -2)
+        camera_layout.addWidget(all_cameras_btn)
+
+        for i in range(self.cameras_amount):
+            camera_btn = QPushButton(f"Camera {i+1}")
+            camera_btn.setCheckable(True)
+            self.camera_selection_group.addButton(camera_btn, i)
+            camera_layout.addWidget(camera_btn)
+
+        main_control_layout.addWidget(camera_group)
+
+        fps_group = QGroupBox("Playback Speed")
+        fps_group.setAlignment(Qt.AlignmentFlag.AlignTop)
+        fps_layout = QVBoxLayout(fps_group)
+        
+        fps_control_layout = QHBoxLayout()
+        fps_label = QLabel("FPS:")
+        self.fps_value_label = QLabel("10")
+        
+        self.fps_slider = QSlider(Qt.Orientation.Horizontal)
+        self.fps_slider.setRange(1, 30)
+        self.fps_slider.setValue(10)
+        self.fps_slider.valueChanged.connect(self._on_fps_changed)
+        
+        fps_control_layout.addWidget(fps_label)
+        fps_control_layout.addWidget(self.fps_slider)
+        fps_control_layout.addWidget(self.fps_value_label)
+        fps_layout.addLayout(fps_control_layout)
+        
+        main_control_layout.addWidget(fps_group)
+
+        nav_group = QGroupBox("Navigation")
+        nav_group.setAlignment(Qt.AlignmentFlag.AlignTop)
+        nav_layout = QVBoxLayout(nav_group)
+
+        frame_nav_layout = QHBoxLayout()
+        self.prev_button = QPushButton("◄")
+        self.prev_button.clicked.connect(self._prev_frame)
+        self.next_button = QPushButton("►")
+        self.next_button.clicked.connect(self._next_frame)
+        
+        frame_nav_layout.addWidget(self.prev_button)
+        frame_nav_layout.addWidget(self.next_button)
+        nav_layout.addLayout(frame_nav_layout)
+
+        video_nav_layout = QHBoxLayout()
+        self.video_direction_group = QButtonGroup()
+        
+        self.video_backward_btn = QPushButton("◄◄")
+        self.video_backward_btn.setCheckable(True)
+        
+        self.toggle_video_btn = QPushButton("Play")
+        self.toggle_video_btn.setCheckable(True)
+        self.toggle_video_btn.clicked.connect(self._toggle_video)
+        
+        self.video_forward_btn = QPushButton("►►")
+        self.video_forward_btn.setCheckable(True)
+        self.video_forward_btn.setChecked(True)
+        
+        self.video_direction_group.addButton(self.video_backward_btn, 0)
+        self.video_direction_group.addButton(self.video_forward_btn, 1)
+        self.video_direction_group.buttonClicked.connect(self._on_video_direction_changed)
+        
+        video_nav_layout.addWidget(self.video_backward_btn)
+        video_nav_layout.addWidget(self.toggle_video_btn)
+        video_nav_layout.addWidget(self.video_forward_btn)
+        nav_layout.addLayout(video_nav_layout)
+
+        main_control_layout.addWidget(nav_group)
+
+        self.camera_selection_group.buttonClicked.connect(self._on_camera_selection)
+
+
+        export_group = QGroupBox("Export")
+        export_group.setAlignment(Qt.AlignmentFlag.AlignTop)
+        export_layout = QVBoxLayout(export_group)
+        
+        self.export_button = QPushButton("Export Video")
+        self.export_button.clicked.connect(self.exportVideo)
+        self.export_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                font-weight: bold;
+                padding: 10px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+                color: #666666;
+            }
+        """)
+        export_layout.addWidget(self.export_button)
+        main_control_layout.addWidget(export_group)
+
+
+        deleteButtonLayout = QVBoxLayout()
+        deleteButtonLayout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        deleteImagesButton = QPushButton("Delete Images")
+        deleteImagesButton.clicked.connect(self._deleteImages)
+        deleteButtonLayout.addWidget(deleteImagesButton)
+        main_control_layout.addLayout(deleteButtonLayout)
+
+
+        cameraAppLayout = QVBoxLayout()
+        cameraAppLayout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.cameraAppButton = QPushButton()
+        self.cameraAppButton.setIcon(QIcon("assets/camera.png"))
+        cameraAppLayout.addWidget(self.cameraAppButton)
+        main_control_layout.addLayout(cameraAppLayout)
+
         
 
-        for i in range(self.camerasAmount):
-            cameraSelectionButton = QPushButton(f"Camera {i+1}")
-            cameraSelectionButton.setCheckable(True)
-            self.cameraSelectionButtonGroup.addButton(cameraSelectionButton , i)
-            cameraSelectionLayout.addWidget(cameraSelectionButton)
+    def _on_frame_ready(self, camera_index, pixmap, info_text):
+        if camera_index < len(self.camera_attributes):
+            cam_attr = self.camera_attributes[camera_index]
+            cam_attr["imageLabel"].setPixmap(pixmap)
+            cam_attr["infoLabel"].setText(info_text)
 
-        self.cameraSelectionButtonGroup.buttonClicked.connect(self._onCameraSelection)
+    def _on_camera_selection(self, button):
+        button_id = self.camera_selection_group.id(button)
+        self.camera_selected_index = button_id
+        
+        if button_id == -2:  
+            self.clear_layout(self.all_frames_layout)
+            for widget in self.frame_widgets:
+                self.all_frames_layout.addWidget(widget)
+            self.stacked_widget.setCurrentIndex(0)
+        else:  
+            self._show_single_camera(button_id)
 
-    def _onCameraSelection(self , button:QPushButton):
-        buttonId = self.cameraSelectionButtonGroup.id(button)
-        self.cameraSelectedIndex = buttonId
-        if  buttonId == -2:
-            for frameWidget in self.frameWidgets:
-                self.allFramesLayout.addWidget(frameWidget)
-            self.stackedWidget.setCurrentIndex(0)
+    def _show_single_camera(self, camera_index):
+        self.clear_layout(self.single_frame_layout)
+        if camera_index < len(self.frame_widgets):
+            self.single_frame_layout.addWidget(self.frame_widgets[camera_index])
+        self.stacked_widget.setCurrentIndex(1)
+
+    def _on_fps_changed(self, value):
+        self.fps_value_label.setText(str(value))
+        for worker in self.frame_workers:
+            worker.set_fps(value)
+
+    def _on_video_direction_changed(self, button):
+        button_id = self.video_direction_group.id(button)
+        direction = VideoDirection.backward if button_id == 0 else VideoDirection.forward
+        for worker in self.frame_workers:
+            worker.change_video_direction(direction)
+
+    def _prev_frame(self):
+        self._step_frame(VideoDirection.backward)
+
+    def _next_frame(self):
+        self._step_frame(VideoDirection.forward)
+
+    def _step_frame(self, direction):
+        if self.is_playing:
+            self._toggle_video(False)
+            self.toggle_video_btn.setChecked(False)
+
+        if self.camera_selected_index == -2:
+            for i, cam_attr in enumerate(self.camera_attributes):
+                self._update_frame_manual(cam_attr, direction, i)
+        else: 
+            cam_attr = self.camera_attributes[self.camera_selected_index]
+            self._update_frame_manual(cam_attr, direction, self.camera_selected_index)
+
+    def _update_frame_manual(self, cam_attr, direction, worker_index):
+        images = cam_attr["images"]
+        timestamps = cam_attr["timestamps"]
+        
+        if not images:
+            return
+            
+        current_index = cam_attr["currentIndex"]
+        new_index = (current_index + direction.value) % len(images)
+        cam_attr["currentIndex"] = new_index
+        
+        worker = self.frame_workers[worker_index]
+        pixmap = worker._numpy_to_pixmap(images[new_index])
+        if pixmap:
+            scaled_pixmap = worker._get_scaled_pixmap(pixmap)
+            cam_attr["imageLabel"].setPixmap(scaled_pixmap)
+            cam_attr["infoLabel"].setText(f"Frame: {new_index}\nTime: {timestamps[new_index]}")
+
+    def _toggle_video(self, checked):
+        self.is_playing = checked
+        
+        if checked:
+            self.toggle_video_btn.setText("Pause")
+            for worker in self.frame_workers:
+                if not worker.isRunning():
+                    worker.start()
         else:
-            frameWidget = self.frameWidgets[buttonId]
-            self.clearLayout(self.singleFrameLayout)
-            self.singleFrameLayout.addWidget(frameWidget)
-            self.stackedWidget.setCurrentIndex(1)
-    
-    def clearLayout(self , layout):
+            self.toggle_video_btn.setText("Play")
+            for worker in self.frame_workers:
+                worker.stop()
+
+    def load_camera_data(self, camera_index, images, timestamps):
+        if 0 <= camera_index < len(self.camera_attributes):
+            self.camera_attributes[camera_index]["images"] = images
+            self.camera_attributes[camera_index]["timestamps"] = timestamps
+            self.camera_attributes[camera_index]["currentIndex"] = 0
+            
+            if images:
+                worker = self.frame_workers[camera_index]
+                pixmap = worker._numpy_to_pixmap(images[0])
+                if pixmap:
+                    scaled_pixmap = worker._get_scaled_pixmap(pixmap)
+                    self.camera_attributes[camera_index]["imageLabel"].setPixmap(scaled_pixmap)
+                    self.camera_attributes[camera_index]["infoLabel"].setText(
+                        f"Frame: 0\nTime: {timestamps[0]}"
+                    )
+            
+            self.update_export_button_state()
+
+    def clear_layout(self, layout):
         while layout.count():
             child = layout.takeAt(0)
             if child.widget():
                 child.widget().setParent(None)
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_Left: 
-            self._prevButton()
+        if event.key() == Qt.Key.Key_Left:
+            self._prev_frame()
             event.accept()
         elif event.key() == Qt.Key.Key_Right:
-            self._nextButton()
+            self._next_frame()
             event.accept()
         elif event.key() == Qt.Key.Key_Space:
-            self._toggleVideo()
+            self.toggle_video_btn.click()
             event.accept()
         else:
             super().keyPressEvent(event)
 
-    def _prevButton(self,):
-        pass
+    def closeEvent(self, event):
+        for worker in self.frame_workers:
+            worker.stop()
+        event.accept()
+    
+    def exportVideo(self):
+        def save_video(images: list, fps: int, output_file: str):
+            if not images or len(images) == 0:
+                return False
 
-    def _nextButton(self,) :
-        pass
+            try:
+                if images[0].ndim == 2:  
+                    height, width = images[0].shape
+                    is_color = False
+                else:  
+                    height, width, channels = images[0].shape
+                    is_color = True
 
-    def _toggleVideo(self):
-        pass
+                fourcc_codes = ['mp4v', 'avc1', 'X264', 'MJPG']
+                video_writer = None
+                
+                for codec in fourcc_codes:
+                    try:
+                        fourcc = cv2.VideoWriter_fourcc(*codec)
+                        video_writer = cv2.VideoWriter(output_file, fourcc, fps, (width, height), isColor=is_color)
+                        if video_writer.isOpened():
+                            print(f"Using codec: {codec}")
+                            break
+                        else:
+                            video_writer = None
+                    except Exception as e:
+                        print(f"Codec {codec} failed: {e}")
+                        video_writer = None
 
+                if video_writer is None:
+                    print("Cannot initialize any video codec.")
+                    return False
+
+                for i, image in enumerate(images):
+                    try:
+                        if image.ndim == 2: 
+                            if image.dtype != np.uint8:
+                                image = np.uint8(image)
+                            frame = image
+                        else: 
+                            if image.shape[2] == 3:
+                                frame = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+                            else:
+                                frame = image[:, :, :3]
+                                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                        
+                        video_writer.write(frame)
+                        
+                        if i % 10 == 0:
+                            print(f"Written {i+1}/{len(images)} frames")
+                            
+                    except Exception as e:
+                        print(f"Error writing frame {i}: {e}")
+                        continue
+
+                video_writer.release()
+                print(f"Video successfully saved to: {output_file}")
+                
+            except Exception as e:
+                print(f"Error in video export: {e}")
+                if 'video_writer' in locals() and video_writer is not None:
+                    video_writer.release()
+
+        fps = self.fps_slider.value()
+        exported_count = 0
+        
+        if self.camera_selected_index == -2:  
+            cameras_to_export = range(len(self.camera_attributes))
+        else:  
+            cameras_to_export = [self.camera_selected_index]
+
+        for i in cameras_to_export:
+            attr = self.camera_attributes[i]
+            images = attr["images"]
+            
+            if not images or len(images) == 0:
+                QMessageBox.warning(self, "Export Error", 
+                                  f"No images available for Camera {i+1}")
+                continue
+
+            default_dir = f"output/Camera{i+1}"
+            os.makedirs(default_dir, exist_ok=True)
+            default_filename = f"camera{i+1}_frames{len(images)}_fps{fps}.mp4"
+            default_path = os.path.join(default_dir, default_filename)
+
+            output_file, selected_filter = QFileDialog.getSaveFileName(
+                self,
+                f"Export Video - Camera {i+1}",
+                default_path,
+                "MP4 files (*.mp4);;All files (*)"
+            )
+            
+            if not output_file:
+                continue  
+
+            if not output_file.lower().endswith('.mp4'):
+                output_file += '.mp4'
+
+
+            
+
+
+            thread = Thread(target=save_video, 
+                          args=(images, fps, output_file),
+                          daemon=True)
+            thread.start()
+            
+            exported_count += 1
+
+        if exported_count == 0:
+            QMessageBox.information(self, "Export", "No videos were exported.")
+
+
+    def _deleteImages(self):
+        def handleDeleting(attr):
+            attr["images"].clear()
+            attr["timestamps"].clear()
+            attr["imageLabel"].setPixmap(QPixmap("assets/no_image.png"))
+            attr["infoLabel"].setText("Frame : None\nTime : None")
+
+        if self.camera_selected_index == -2:
+            for attr in self.camera_attributes:
+                handleDeleting(attr)
+        else:
+            attr = self.camera_attributes[self.camera_selected_index]
+            handleDeleting(attr)
+
+    def update_export_button_state(self):
+        has_data = False
+        for attr in self.camera_attributes:
+            if attr["images"] and len(attr["images"]) > 0:
+                has_data = True
+                break
+        
+        self.export_button.setEnabled(has_data)
+        
+        if has_data:
+            self.export_button.setToolTip("Export captured frames to MP4 video")
+        else:
+            self.export_button.setToolTip("No frame data available for export")
 
 app = QApplication(sys.argv)
 window = MainWindow()
