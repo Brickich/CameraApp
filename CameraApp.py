@@ -848,7 +848,9 @@ class MainWindow(QMainWindow):
     def _onTriggerWorkerFinished(self,  cameraIndex: int):
         images = self.cameraControl.cameras[cameraIndex].numpyImages
         timestamps = self.cameraControl.cameras[cameraIndex].timestamps
-        self.frameViewer.load_camera_data(cameraIndex , images , timestamps)
+        if len(images) >= 10:
+            self.frameViewer.load_camera_data(cameraIndex , images , timestamps)
+            self._showFrameViewer()
         QTimer.singleShot(0, lambda: self._update_trigger_ui(cameraIndex))
 
 
