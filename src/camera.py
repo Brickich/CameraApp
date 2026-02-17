@@ -61,6 +61,7 @@ class CameraControl:
                 
         for i in range(len(self.cams)):
             cam = self.cams[i]
+            
             device = self.devices[i]
             print(f"Device {i+1}: {device}")  
             model = device
@@ -134,10 +135,11 @@ class Camera:
             self.TriggerDelay = self.FeatureControl.get_float_feature("TriggerDelay")
             self.TriggerSelector = self.FeatureControl.get_enum_feature("TriggerSelector")
             self.TriggerActivation = self.FeatureControl.get_enum_feature("TriggerActivation")
-
             self.FrameRateMode = self.FeatureControl.get_enum_feature("AcquisitionFrameRateMode")
             self.TriggerSoftware = self.FeatureControl.get_command_feature("TriggerSoftware")
             self.LineMode = self.FeatureControl.get_enum_feature("LineMode")
+            self.LineSource = self.FeatureControl.get_enum_feature("LineSource")
+            self.LineSelector = self.FeatureControl.get_enum_feature("LineSelector")
             self.CurrentFrameRate = self.FeatureControl.get_float_feature("CurrentAcquisitionFrameRate")
             self.AcquisitionMode = self.FeatureControl.get_enum_feature("AcquisitionMode")
             self.DeviceLinkThroughputLimit = self.FeatureControl.get_int_feature("DeviceLinkThroughputLimit")
@@ -232,8 +234,7 @@ class Camera:
         if self.type != "MER":
             self.TriggerSelector.set(gx.GxTriggerSelectorEntry.FRAME_BURST_START)
             self.AcquisitionBurstFrameCount.set(self.AcquisitionBurstFrameCount.get_range().get("max"))
-
-        # self.LineMode.set("Input")
+        
         self.TriggerMode.set("ON")
         self.TriggerSource.set(triggerSource)
 
@@ -262,12 +263,21 @@ class Camera:
         self.OffsetY.set(preset['OffsetY'])
         
     def previewMode(self):
+        if hasattr(self , "ExposureTimeMode"):
+            self.cam.stream_off()
+            self.ExposureTimeMode.set("Standard")
+            self.cam.stream_on()
         self.ExposureTime.set(float(40000))
 
     def triggerMode(self):
-        self.ExposureTime.set(self.presetManager.getPreset("default").get("ExposureTime"))  
+        exposureTime = self.presetManager.getPreset("default").get("ExposureTime")
+        if exposureTime < 20 and hasattr(self , "ExposureTimeMode"):
+            self.cam.stream_off()
+            self.ExposureTimeMode.set("UltraShort")
+            self.cam.stream_on()
+        self.ExposureTime.set(exposureTime)  
 
-    def saveImages(self , dir_path ):
+    def  saveImages(self , dir_path ):
         for i, (img, timestamp) in enumerate(zip(self.images, self.timestamps)):
             img.save(f"{dir_path}/Frame{i+1}__T{timestamp} µs.png")
 

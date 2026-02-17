@@ -323,7 +323,7 @@ class CameraSettingsFrame(QWidget):
 class SettingsWindow(QWidget):
     def __init__(self, parent, cameras: list[Camera]):
         super().__init__(parent)
-        self.setMinimumHeight(680)
+        self.setMinimumHeight(640)
         self.cameraSettingsFrames: list[CameraSettingsFrame] = []
         self.mainLayout = QVBoxLayout(self)
         self.mainLayout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -445,7 +445,8 @@ class SettingsWindow(QWidget):
 
 class TriggerWorker(QThread):
     workerEnd = pyqtSignal()
-    
+    imagesProcessed = pyqtSignal(int , list , list)
+
     def __init__(self, camera: Camera, cameraIndex: int):
         super().__init__()
         self.camera = camera
@@ -474,7 +475,7 @@ class TriggerWorker(QThread):
                     
                 self.camera.FramesCaptured += 1
 
-            if len(self.camera.rawImages) >= 10:
+            if len(self.camera.rawImages) >= 5:
                 self._process_images()
                 
         except Exception as e:
@@ -500,7 +501,10 @@ class TriggerWorker(QThread):
                 
             print(f"Camera {self.cameraIndex+1} recorded: {len(self.camera.rawImages)} frames")
             dirPath = self.checkDir()
+            self.camera.presetManager.saveToFile("trigger" , f"{dirPath}/Trigger_preset.json") 
             Thread(target=self.camera.saveImages , args=(dirPath ,) , daemon=True).start()
+            self.imagesProcessed.emit(self.cameraIndex , self.camera.numpyImages , self.camera.timestamps)
+ 
             
         except Exception as e:
             print(f"Error processing images: {e}")
@@ -515,6 +519,7 @@ class TriggerWorker(QThread):
             self.camera.isTriggered = True
             
             self.camera.rawImages.clear()
+            self.camera.numpyImages.clear()
             self.camera.images.clear()
             self.camera.timestamps.clear()
             self.camera.FramesCaptured = 0
@@ -564,6 +569,7 @@ class TriggerWorker(QThread):
 
 class ImageWorker(QThread):
     imageReady = pyqtSignal(int, QPixmap)  
+
     
     def __init__(self, camera: Camera, cameraIndex: int):
         super().__init__()
@@ -765,7 +771,7 @@ class ImageWindow(QVBoxLayout):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setMinimumSize(1280, 720)
+        self.setMinimumSize(1000, 640)
         self.cameraControl = CameraControl()
         self.imageWorkers = [] 
         self.triggerWorkers = []
@@ -781,7 +787,7 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(mainWidget)
 
         leftWidget = QWidget()
-        leftWidget.setMinimumSize(400, 720)
+        leftWidget.setMinimumSize(400, 640)
         self.imageLayout = ImageWindow(leftWidget, self.cameraControl.cameras)
 
         rightWidget = QWidget()
@@ -809,6 +815,7 @@ class MainWindow(QMainWindow):
 
             triggerWorker = TriggerWorker(camera, i )
             triggerWorker.workerEnd.connect(lambda idx=i: self._onTriggerWorkerFinished(idx))
+            triggerWorker.imagesProcessed.connect(lambda idx , imgs , tmstmps: self._omImagesProcessed(idx , imgs , tmstmps))
             self.triggerWorkers.append(triggerWorker)
             
             settings_frame = self.settingsWindow.cameraSettingsFrames[i]
@@ -845,19 +852,22 @@ class MainWindow(QMainWindow):
     def _onImageReady(self, cameraIndex: int, pixmap: QPixmap):
         self.imageLayout.updateImage(cameraIndex, pixmap)
 
-    def _onTriggerWorkerFinished(self,  cameraIndex: int):
-        images = self.cameraControl.cameras[cameraIndex].numpyImages
-        timestamps = self.cameraControl.cameras[cameraIndex].timestamps
-        if len(images) >= 10:
-            self.frameViewer.load_camera_data(cameraIndex , images , timestamps)
-            self._showFrameViewer()
-        QTimer.singleShot(0, lambda: self._update_trigger_ui(cameraIndex))
+    def _omImagesProcessed(self, index:int , images:list , timestamps:list):
+        if len(images) >=5:
+            self.frameViewer.load_camera_data(index , images , timestamps)
+
+            QTimer.singleShot(100 , lambda: [self.frameViewer.update_display_for_camera(index), self._showFrameViewer()])
+            
+
+
+    def _onTriggerWorkerFinished(self,  cameraIndex: int): 
+        QTimer.singleShot(50, lambda: self._update_trigger_ui(cameraIndex))
 
 
     def _update_trigger_ui(self, cameraIndex: int):
         settings_frame = self.settingsWindow.cameraSettingsFrames[cameraIndex]
         settings_frame.triggerButton.setChecked(False)
-        
+
         if settings_frame.playButton.isChecked():
             self._toggleCameraRecording(True , cameraIndex)
 
@@ -927,8 +937,9 @@ class MainWindow(QMainWindow):
         self.stackedWidget.setCurrentIndex(0)
 
     def _showFrameViewer(self):
-        self.stackedWidget.widget(1).setFocus()
-        self.stackedWidget.setCurrentIndex(1)
+        QTimer.singleShot(50 , lambda : [self.stackedWidget.widget(1).setFocus() , self.stackedWidget.setCurrentIndex(1)])
+        
+        
 
     def closeEvent(self, event):
         for worker in self.imageWorkers:
@@ -957,7 +968,6 @@ class FrameWorker(QThread):
         self.cam_attributes = cam_attributes
         self.is_running = False
         self.video_direction = VideoDirection.forward
-        self.current_index = 0
         self.target_fps = 10
         self.frame_delay_ms = 1000 // self.target_fps
         self.last_frame_time = 0
@@ -977,25 +987,35 @@ class FrameWorker(QThread):
             self.last_frame_time = current_time
             self._process_frame()
 
+    def set_current_index(self, index):
+        if self.cam_attributes and "images" in self.cam_attributes:
+            images = self.cam_attributes["images"]
+            if images and 0 <= index < len(images):
+                self.cam_attributes["currentIndex"] = index
+
     def _process_frame(self):
         images = self.cam_attributes["images"]
         timestamps = self.cam_attributes["timestamps"]
         
-        if not images or self.current_index >= len(images):
+        if not images:
             return
             
-        if self.video_direction == VideoDirection.forward:
-            self.current_index = (self.current_index + 1) % len(images)
-        else:
-            self.current_index = (self.current_index - 1) % len(images)
+        current_index = self.cam_attributes["currentIndex"]
         
-        frame = images[self.current_index]
-        timestamp = timestamps[self.current_index]
+        if self.video_direction == VideoDirection.forward:
+            new_index = (current_index + 1) % len(images)
+        else:
+            new_index = (current_index - 1) % len(images)
+        
+        self.cam_attributes["currentIndex"] = new_index
+        
+        frame = images[new_index]
+        timestamp = timestamps[new_index] if timestamps else 0
         
         pixmap = self._numpy_to_pixmap(frame)
         if pixmap:
             scaled_pixmap = self._get_scaled_pixmap(pixmap)
-            info_text = f"Frame: {self.current_index}\nTime: {timestamp}"
+            info_text = f"Frame: {new_index}\nTime: {timestamp}"
             self.frame_ready.emit(self.camera_index, scaled_pixmap, info_text)
 
     def _numpy_to_pixmap(self, numpy_image):
@@ -1108,7 +1128,6 @@ class FrameViewer(QWidget):
 
     def _setupUi(self):
         main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(10, 10, 10, 10)
 
         self.left_widget = QWidget()
         left_layout = QVBoxLayout(self.left_widget)
@@ -1192,7 +1211,7 @@ class FrameViewer(QWidget):
     def _initControlLayout(self):
         main_control_layout = QVBoxLayout(self.right_widget)
         main_control_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        main_control_layout.setSpacing(15)
+
 
         camera_group = QGroupBox("Camera Selection")
         camera_group.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -1325,18 +1344,47 @@ class FrameViewer(QWidget):
             cam_attr = self.camera_attributes[camera_index]
             cam_attr["imageLabel"].setPixmap(pixmap)
             cam_attr["infoLabel"].setText(info_text)
+    
+    def update_display_for_camera(self, camera_index: int):
+        if 0 <= camera_index < len(self.camera_attributes):
+            cam_attr = self.camera_attributes[camera_index]
+            images = cam_attr["images"]
+            timestamps = cam_attr["timestamps"]
+            current_index = cam_attr["currentIndex"]
+
+            if images and 0 <= current_index < len(images):
+                worker = self.frame_workers[camera_index]
+                pixmap = worker._numpy_to_pixmap(images[current_index])
+                if pixmap:
+                    if hasattr(worker, '_cached_size'):
+                        delattr(worker, '_cached_size')
+                    if hasattr(worker, '_cached_pixmap'):
+                        delattr(worker, '_cached_pixmap')
+
+                    scaled_pixmap = worker._get_scaled_pixmap(pixmap)
+                    cam_attr["imageLabel"].setPixmap(scaled_pixmap)
+                    cam_attr["infoLabel"].setText(
+                        f"Frame: {current_index}\nTime: {timestamps[current_index] if timestamps else 0}"
+                    )
 
     def _on_camera_selection(self, button):
         button_id = self.camera_selection_group.id(button)
         self.camera_selected_index = button_id
-        
+
+        if self.is_playing:
+            self._toggle_video(False)
+            self.toggle_video_btn.setChecked(False)
+
         if button_id == -2:  
             self.clear_layout(self.all_frames_layout)
-            for widget in self.frame_widgets:
+            for i, widget in enumerate(self.frame_widgets):
                 self.all_frames_layout.addWidget(widget)
+
+                self.update_display_for_camera(i)
             self.stacked_widget.setCurrentIndex(0)
         else:  
             self._show_single_camera(button_id)
+            self.update_display_for_camera(button_id)
 
     def _show_single_camera(self, camera_index):
         self.clear_layout(self.single_frame_layout)
@@ -1387,18 +1435,24 @@ class FrameViewer(QWidget):
         worker = self.frame_workers[worker_index]
         pixmap = worker._numpy_to_pixmap(images[new_index])
         if pixmap:
+            if hasattr(worker, '_cached_size'):
+                delattr(worker, '_cached_size')
+            if hasattr(worker, '_cached_pixmap'):
+                delattr(worker, '_cached_pixmap')
             scaled_pixmap = worker._get_scaled_pixmap(pixmap)
             cam_attr["imageLabel"].setPixmap(scaled_pixmap)
             cam_attr["infoLabel"].setText(f"Frame: {new_index}\nTime: {timestamps[new_index]}")
 
     def _toggle_video(self, checked):
         self.is_playing = checked
-        
+
         if checked:
             self.toggle_video_btn.setText("Pause")
-            for worker in self.frame_workers:
-                if not worker.isRunning():
-                    worker.start()
+            for i, worker in enumerate(self.frame_workers):
+                if self.camera_attributes[i]["images"]:
+                    if not worker.isRunning():
+                        worker.cam_attributes = self.camera_attributes[i]
+                        worker.start()
         else:
             self.toggle_video_btn.setText("Play")
             for worker in self.frame_workers:
@@ -1406,20 +1460,31 @@ class FrameViewer(QWidget):
 
     def load_camera_data(self, camera_index, images, timestamps):
         if 0 <= camera_index < len(self.camera_attributes):
+            worker = self.frame_workers[camera_index]
+            if worker.isRunning():
+                worker.stop()
+
+            self.camera_attributes[camera_index]["images"].clear()
+            self.camera_attributes[camera_index]["timestamps"].clear()
+
             self.camera_attributes[camera_index]["images"] = images
             self.camera_attributes[camera_index]["timestamps"] = timestamps
             self.camera_attributes[camera_index]["currentIndex"] = 0
-            
-            if images:
-                worker = self.frame_workers[camera_index]
+
+            if hasattr(worker, '_cached_size'):
+                delattr(worker, '_cached_size')
+            if hasattr(worker, '_cached_pixmap'):
+                delattr(worker, '_cached_pixmap')
+
+            if images and len(images) > 0:
                 pixmap = worker._numpy_to_pixmap(images[0])
                 if pixmap:
                     scaled_pixmap = worker._get_scaled_pixmap(pixmap)
                     self.camera_attributes[camera_index]["imageLabel"].setPixmap(scaled_pixmap)
                     self.camera_attributes[camera_index]["infoLabel"].setText(
-                        f"Frame: 0\nTime: {timestamps[0]}"
+                        f"Frame: 0\nTime: {timestamps[0] if timestamps else 0}"
                     )
-            
+
             self.update_export_button_state()
 
     def clear_layout(self, layout):
@@ -1563,6 +1628,7 @@ class FrameViewer(QWidget):
         def handleDeleting(attr):
             attr["images"].clear()
             attr["timestamps"].clear()
+            attr["currentIndex"] = 0 
             attr["imageLabel"].setPixmap(QPixmap("assets/no_image.png"))
             attr["infoLabel"].setText("Frame : None\nTime : None")
 
@@ -1586,7 +1652,17 @@ class FrameViewer(QWidget):
             self.export_button.setToolTip("Export captured frames to MP4 video")
         else:
             self.export_button.setToolTip("No frame data available for export")
+    
+    def showEvent(self, event):
+        super().showEvent(event)
 
+
+        if self.camera_selected_index == -2:
+            for i in range(len(self.camera_attributes)):
+                self.update_display_for_camera(i)
+        elif self.camera_selected_index >= 0:
+            self.update_display_for_camera(self.camera_selected_index)
+            
 app = QApplication(sys.argv)
 window = MainWindow()
 window.show()
