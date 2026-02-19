@@ -227,9 +227,9 @@ class Camera:
         self.FrameRateMode.set("ON")
         self.TriggerMode.set("OFF")
 
-    def triggerSettings(self, triggerSource:str ):
+    def triggerSettings(self, triggerSource:str , triggerActivation : str):
         self.applyPreset(self.presetManager.getPreset("trigger"))
-        self.TriggerActivation.set(gx.GxTriggerActivationEntry.FALLINGEDGE)
+        self.TriggerActivation.set(triggerActivation)
         self.FrameRateMode.set("ON")
         if self.type != "MER":
             self.TriggerSelector.set(gx.GxTriggerSelectorEntry.FRAME_BURST_START)
@@ -300,7 +300,9 @@ class Camera:
             f"{self.model}\n"
             f"Width:{self.Width.get()}\tHeight:{self.Height.get()}\tOffsetX:{self.OffsetX.get()}\tOffsetY:{self.OffsetY.get()}\n"
             f"FrameRate:{self.CurrentFrameRate.get()}\tFrames:{self.FramesQuantity}\tExposureTime:{self.ExposureTime.get()}\n"
-            f"TriggerSource:{self.TriggerSource.get()}\tTriggerDelay:{self.TriggerDelay.get()}"
+            f"TriggerSource:{self.TriggerSource.get()}\tTriggerDelay:{self.TriggerDelay.get()}\n"
+            f"TriggerActivation:{self.TriggerActivation.get()}\n"
+
         )
 
         

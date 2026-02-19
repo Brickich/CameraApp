@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
 
 class CameraSettingsFrame(QWidget):
     triggerSourceChanged = pyqtSignal(str)
+    triggerActivationChanged = pyqtSignal(str)
     def __init__(self, camera: Camera):
         super().__init__()
         self.settingsSlidersDict: dict[str, dict[QSlider, type]] = {}
@@ -37,6 +38,7 @@ class CameraSettingsFrame(QWidget):
         self.sliderRanges = {}
         self.camera = camera
         self.mainLayout = QVBoxLayout(self)
+
 
         self._initCameraTriggerLayout()
         self._initCameraControlLayout()
@@ -54,7 +56,7 @@ class CameraSettingsFrame(QWidget):
 
         triggerSourceLayout = QHBoxLayout()
         triggerSourceLabel = QLabel("Trigger Source")
-        triggerSourceLabel.setStyleSheet("font-size : 16px")
+        triggerSourceLabel.setStyleSheet("font-size : 14px")
         triggerSourceLayout.addWidget(triggerSourceLabel)
 
         triggerSourceList = self.camera.TriggerSource.get_range()
@@ -62,9 +64,26 @@ class CameraSettingsFrame(QWidget):
         self.TriggerSource = triggerSources[0]
         triggerSourceCombobox = QComboBox()
         triggerSourceCombobox.addItems(triggerSources)
+        triggerSourceCombobox.setMinimumSize(30 , 30)
         triggerSourceLayout.addWidget(triggerSourceCombobox)
         triggerSourceCombobox.currentTextChanged.connect(self.triggerSourceChanged.emit)
         triggerLayout.addLayout(triggerSourceLayout)
+
+
+        triggerActivationLayout = QHBoxLayout()
+        triggerActivationLabel = QLabel("Trigger Activation")
+        triggerActivationLabel.setStyleSheet("font-size : 14px")
+        triggerActivationLayout.addWidget(triggerActivationLabel)
+        triggerActivationList = self.camera.TriggerActivation.get_range()
+        triggerActivations = [value["symbolic"] for value in triggerActivationList]
+        self.TriggerActivationList = triggerActivations[0]
+        triggerActivationCombobox = QComboBox()
+        triggerActivationCombobox.addItems(triggerActivations)
+        triggerActivationLayout.addWidget(triggerActivationCombobox)
+        triggerActivationCombobox.setMinimumSize(30 , 30)
+        triggerActivationCombobox.currentTextChanged.connect(self.triggerActivationChanged.emit)
+        triggerLayout.addLayout(triggerActivationLayout)
+        
 
     def _initCameraControlLayout(self):
         cameraControlLayout = QHBoxLayout()
@@ -356,8 +375,8 @@ class SettingsWindow(QWidget):
                 
             }
             QComboBox {
-                font-size: 16px;
-                padding: 5px;
+                font-size: 14px;
+                # padding: 5px;
                 border: 2px solid #cccccc;
                 border-radius: 5px;
                 background-color: #f0f0f0;
@@ -453,6 +472,7 @@ class TriggerWorker(QThread):
         self.cameraIndex = cameraIndex
         self.dir = f"output/Camera{cameraIndex+1}"
         self.triggerSource = "Software"
+        self.triggerActivation = "FallingEdge"
 
     def run(self):
         
@@ -526,7 +546,7 @@ class TriggerWorker(QThread):
 
             self.camera.cam.stream_off()
 
-            self.camera.triggerSettings(self.triggerSource)
+            self.camera.triggerSettings(self.triggerSource , self.triggerActivation)
 
             self.camera.cam.stream_on()
 
@@ -552,6 +572,9 @@ class TriggerWorker(QThread):
     def _onTriggerSourceChange(self, triggerSource: str):
         self.triggerSource = triggerSource
 
+
+    def _onTriggerActivationChange (self , triggerActivation: str):
+        self.triggerActivation = triggerActivation
 
     def checkDir(self ) -> str:
         dirPath = self.dir + "/"
@@ -771,7 +794,7 @@ class ImageWindow(QVBoxLayout):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setMinimumSize(1000, 640)
+        self.setMinimumSize(1024, 780)
         self.cameraControl = CameraControl()
         self.imageWorkers = [] 
         self.triggerWorkers = []
@@ -787,10 +810,11 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(mainWidget)
 
         leftWidget = QWidget()
-        leftWidget.setMinimumSize(400, 640)
+        leftWidget.setMinimumSize(400, 780)
         self.imageLayout = ImageWindow(leftWidget, self.cameraControl.cameras)
 
         rightWidget = QWidget()
+        rightWidget.setContentsMargins( 0 , 0 , 0 , 0)
         rightWidget.setFixedWidth(300)
 
         layout.addWidget(leftWidget)
@@ -823,6 +847,7 @@ class MainWindow(QMainWindow):
             settings_frame.applyButton.clicked.connect(lambda checked, idx=i: self._applyCameraSettings(idx))
             settings_frame.triggerButton.clicked.connect(lambda checked , idx = i : self._toggleCameraTrigger(checked , idx))
             settings_frame.triggerSourceChanged.connect(triggerWorker._onTriggerSourceChange)
+            settings_frame.triggerActivationChanged.connect(triggerWorker._onTriggerActivationChange)
             settings_frame.captureModeButtonGroup.buttonClicked.connect(lambda btn , idx = i : self._toggleCaptureMode(btn , idx))
 
     def startCameraTrigger(self, cameraIndex:int):
