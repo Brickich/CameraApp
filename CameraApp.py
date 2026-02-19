@@ -187,6 +187,7 @@ class CameraSettingsFrame(QWidget):
         for setting in self.camera.settings:
             if hasattr(self.camera, setting):
                 hLayout = QHBoxLayout()
+                
                 label = QLabel(setting)
 
                 slider = QSlider(Qt.Orientation.Horizontal)
@@ -231,6 +232,10 @@ class CameraSettingsFrame(QWidget):
                 entry.setText(str(value))
                 entry.returnPressed.connect(lambda sldr=slider, ntry=entry: self._onEntryChange(sldr, ntry))
 
+                if setting == "ExposureTime":
+                    label.setText(setting + " μs")
+                if setting == "TriggerDelay":
+                    label.setText(setting + " μs")
                 hLayout.addWidget(label, alignment=Qt.AlignmentFlag.AlignLeft)
                 hLayout.addWidget(slider, alignment=Qt.AlignmentFlag.AlignCenter)
                 hLayout.addWidget(entry, alignment=Qt.AlignmentFlag.AlignRight)
@@ -386,7 +391,7 @@ class SettingsWindow(QWidget):
                 subcontrol-position: top right;
                 width: 20px;
                 border-left-width: 1px;
-                border-left-color: darkgray;
+                border-left-color: darkgray;  
                 border-left-style: solid;
                 border-top-right-radius: 5px;
                 border-bottom-right-radius: 5px;
