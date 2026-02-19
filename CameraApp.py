@@ -1398,7 +1398,7 @@ class FrameViewer(QWidget):
                     scaled_pixmap = worker._get_scaled_pixmap(pixmap)
                     cam_attr["imageLabel"].setPixmap(scaled_pixmap)
                     cam_attr["infoLabel"].setText(
-                        f"Frame: {current_index}\nTime: {timestamps[current_index] if timestamps else 0}"
+                        f"Frame: {current_index}\nTime: {timestamps[current_index] if timestamps else 0} μs"
                     )
 
     def _on_camera_selection(self, button):
@@ -1475,7 +1475,7 @@ class FrameViewer(QWidget):
                 delattr(worker, '_cached_pixmap')
             scaled_pixmap = worker._get_scaled_pixmap(pixmap)
             cam_attr["imageLabel"].setPixmap(scaled_pixmap)
-            cam_attr["infoLabel"].setText(f"Frame: {new_index}\nTime: {timestamps[new_index]}")
+            cam_attr["infoLabel"].setText(f"Frame: {new_index}\nTime: {timestamps[new_index]} μs")
 
     def _toggle_video(self, checked):
         self.is_playing = checked
