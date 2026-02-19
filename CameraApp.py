@@ -511,9 +511,12 @@ class TriggerWorker(QThread):
 
     def _process_images(self):
         try:
+            delay = self.camera.TriggerDelay.get()
+            # delay *=1e12 
+            print(delay)
             for i, rawImage in enumerate(self.camera.rawImages):
                 if i > 0:
-                    self.camera.timestamps.append(int(rawImage.get_timestamp() - self.camera.timestamps[0]) / 1000)
+                    self.camera.timestamps.append(int(rawImage.get_timestamp() - self.camera.timestamps[0] ) / 1000  + delay)
                 else:
                     self.camera.timestamps.append(rawImage.get_timestamp())
                 numpyImage = self.camera.convertRawImage(rawImage)
@@ -522,7 +525,8 @@ class TriggerWorker(QThread):
                 self.camera.images.append(self.camera.getImage(numpyImage))
             
             if self.camera.timestamps:
-                self.camera.timestamps[0] = 0.0
+                self.camera.timestamps[0] = delay
+                
                 
             print(f"Camera {self.cameraIndex+1} recorded: {len(self.camera.rawImages)} frames")
             dirPath = self.checkDir()
